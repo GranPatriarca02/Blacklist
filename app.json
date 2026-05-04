@@ -30,7 +30,16 @@
       "favicon": "./assets/icon.jpeg"
     },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.24"
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
