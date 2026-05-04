@@ -1,0 +1,41 @@
+# OSX
+.DS_Store
+
+# XDE
+.expo/
+.expo-shared/
+
+# Node
+node_modules/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Builds
+dist/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# IDEs
+.vscode/
+.idea/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Metro
+.metro-health-check*
+
+# Native
+ios/
+android/

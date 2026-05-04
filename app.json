@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "Blacklist",
+    "slug": "blacklist",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.jpeg",
+    "scheme": "blacklist",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/icon.jpeg",
+      "resizeMode": "contain",
+      "backgroundColor": "#121212"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.charlie.blacklist"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.jpeg",
+        "backgroundColor": "#121212"
+      },
+      "package": "com.charlie.blacklist"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/icon.jpeg"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
