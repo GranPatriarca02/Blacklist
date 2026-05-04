@@ -4,12 +4,12 @@
     "slug": "blacklist",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.jpeg",
+    "icon": "./assets/icono.jpeg",
     "scheme": "blacklist",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/icon.jpeg",
+      "image": "./assets/icono.jpeg",
       "resizeMode": "contain",
       "backgroundColor": "#121212"
     },
@@ -19,7 +19,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.jpeg",
+        "foregroundImage": "./assets/icono.jpeg",
         "backgroundColor": "#121212"
       },
       "package": "com.charlie.blacklist"
@@ -27,7 +27,7 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/icon.jpeg"
+      "favicon": "./assets/icono.jpeg"
     },
     "plugins": [
       "expo-router",
