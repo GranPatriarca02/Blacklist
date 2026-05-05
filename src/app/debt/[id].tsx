@@ -18,6 +18,7 @@ import { IconButton } from '@/components/IconButton';
 import { Input } from '@/components/Input';
 import { TimeField } from '@/components/TimeField';
 import { useDebts } from '@/state/DebtsContext';
+import { useSettings } from '@/state/SettingsContext';
 import { nextDueDate } from '@/lib/debtCycles';
 import {
   formatCurrency,
@@ -28,20 +29,30 @@ import {
 import { ensurePermissions } from '@/lib/notifications';
 import { useElapsed } from '@/hooks/useElapsed';
 import { a11y, colors, radius, spacing, typography } from '@/theme';
+import type { WeekDay } from '@/types/debt';
+
+const WEEK_DAYS: { value: WeekDay; label: string }[] = [
+  { value: 1, label: 'Lunes' },
+  { value: 2, label: 'Martes' },
+  { value: 3, label: 'Miércoles' },
+  { value: 4, label: 'Jueves' },
+  { value: 5, label: 'Viernes' },
+  { value: 6, label: 'Sábado' },
+  { value: 0, label: 'Domingo' },
+];
+
+const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 
 /**
  * Detalle + edición de una deuda.
  *
- * Diseño: el form está siempre presente. Cualquier cambio se aplica al pulsar
- * "Guardar cambios". Esto evita confusiones del usuario sobre qué se guardó.
- *
- * Edita: descripción, fecha prevista de pago, hora de notificación.
- * Toggle: campana de notificaciones.
- * Acciones: marcar pagada, eliminar.
+ * Edita: nombre, cantidad, descripción, fecha prevista de pago, hora de notificación,
+ *        día de reactivación (rutinarias).
+ * Acciones: pago completo, pago parcial, eliminar.
  */
 export default function DebtDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { debts, payDebt, removeDebt, editDebt } = useDebts();
+  const { debts } = useDebts();
   const debt = debts.find(d => d.id === id);
 
   if (!debt) {
@@ -64,8 +75,11 @@ export default function DebtDetailScreen() {
 }
 
 function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][number] }) {
-  const { payDebt, removeDebt, editDebt } = useDebts();
+  const { payDebt, partialPayDebt, removeDebt, editDebt } = useDebts();
+  const { settings } = useSettings();
 
+  const [debtorName, setDebtorName] = useState(debt.debtorName);
+  const [amountText, setAmountText] = useState(String(debt.amount / 100));
   const [description, setDescription] = useState(debt.description ?? '');
   const [dueDateText, setDueDateText] = useState(
     debt.dueDate ? debt.dueDate.slice(0, 10) : '',
@@ -73,6 +87,16 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
   const [hour, setHour] = useState(debt.notifyHour);
   const [minute, setMinute] = useState(debt.notifyMinute);
   const [dueError, setDueError] = useState<string | undefined>(undefined);
+  const [nameError, setNameError] = useState<string | undefined>(undefined);
+  const [amountError, setAmountError] = useState<string | undefined>(undefined);
+
+  // Reactivation fields
+  const [reactivateDay, setReactivateDay] = useState(debt.reactivateDay ?? 1);
+  const [reactivateWeekDay, setReactivateWeekDay] = useState<WeekDay>(debt.reactivateWeekDay ?? 1);
+
+  // Partial payment
+  const [partialText, setPartialText] = useState('');
+  const [partialError, setPartialError] = useState<string | undefined>(undefined);
 
   const isPending = debt.cyclePaidAt === null;
   const elapsedMs = useElapsed(debt.cycleStartedAt, isPending);
@@ -87,38 +111,78 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
     return debt.frequency === 'weekly' ? 'Rutinaria · semanal' : 'Rutinaria · mensual';
   }, [debt]);
 
+  const amountCents = useMemo<number | null>(() => {
+    const cleaned = amountText.replace(/[^0-9.,]/g, '').replace(',', '.');
+    if (!cleaned) return null;
+    const n = parseFloat(cleaned);
+    if (Number.isNaN(n) || n <= 0) return null;
+    return Math.round(n * 100);
+  }, [amountText]);
+
   const dirty =
+    debtorName !== debt.debtorName ||
+    amountCents !== debt.amount ||
     description !== (debt.description ?? '') ||
     dueDateText !== (debt.dueDate ? debt.dueDate.slice(0, 10) : '') ||
     hour !== debt.notifyHour ||
-    minute !== debt.notifyMinute;
+    minute !== debt.notifyMinute ||
+    (debt.kind === 'routine' && debt.frequency === 'monthly' && reactivateDay !== (debt.reactivateDay ?? 1)) ||
+    (debt.kind === 'routine' && debt.frequency === 'weekly' && reactivateWeekDay !== (debt.reactivateWeekDay ?? 1));
 
   const handleSave = useCallback(() => {
+    let hasErrors = false;
+
+    // Validate name
+    if (!debtorName.trim()) {
+      setNameError('El nombre no puede estar vacío');
+      hasErrors = true;
+    } else {
+      setNameError(undefined);
+    }
+
+    // Validate amount
+    if (amountCents === null) {
+      setAmountError('Ingresa una cantidad mayor a 0');
+      hasErrors = true;
+    } else {
+      setAmountError(undefined);
+    }
+
     // Validación de fecha (formato YYYY-MM-DD opcional).
     let dueDate: string | null = null;
     if (dueDateText.trim()) {
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dueDateText.trim());
       if (!m) {
         setDueError('Formato esperado: AAAA-MM-DD (ej. 2026-06-15)');
-        return;
+        hasErrors = true;
+      } else {
+        const d = new Date(`${dueDateText.trim()}T12:00:00`);
+        if (Number.isNaN(d.getTime())) {
+          setDueError('Fecha inválida');
+          hasErrors = true;
+        } else {
+          dueDate = d.toISOString();
+          setDueError(undefined);
+        }
       }
-      const d = new Date(`${dueDateText.trim()}T12:00:00`);
-      if (Number.isNaN(d.getTime())) {
-        setDueError('Fecha inválida');
-        return;
-      }
-      dueDate = d.toISOString();
+    } else {
+      setDueError(undefined);
     }
-    setDueError(undefined);
+
+    if (hasErrors || amountCents === null) return;
 
     editDebt(debt.id, {
+      debtorName,
+      amount: amountCents,
       description,
       dueDate,
       notifyHour: hour,
       notifyMinute: minute,
+      ...(debt.kind === 'routine' && debt.frequency === 'monthly' ? { reactivateDay } : {}),
+      ...(debt.kind === 'routine' && debt.frequency === 'weekly' ? { reactivateWeekDay } : {}),
     });
     Alert.alert('Guardado', 'Los cambios se aplicaron correctamente.');
-  }, [debt.id, description, dueDateText, hour, minute, editDebt]);
+  }, [debt.id, debt.kind, debt.frequency, debtorName, amountCents, description, dueDateText, hour, minute, reactivateDay, reactivateWeekDay, editDebt]);
 
   const handleToggleBell = useCallback(async () => {
     if (!debt.notificationsEnabled) {
@@ -144,6 +208,35 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
       ],
     );
   }, [debt, payDebt]);
+
+  const handlePartialPay = useCallback(() => {
+    const cleaned = partialText.replace(/[^0-9.,]/g, '').replace(',', '.');
+    const n = parseFloat(cleaned);
+    if (!cleaned || Number.isNaN(n) || n <= 0) {
+      setPartialError('Ingresa una cantidad mayor a 0');
+      return;
+    }
+    const cents = Math.round(n * 100);
+    if (cents > debt.amount) {
+      setPartialError(`Máximo: ${formatCurrency(debt.amount, debt.currency)}`);
+      return;
+    }
+    setPartialError(undefined);
+    Alert.alert(
+      'Pago parcial',
+      `¿Registrar pago parcial de ${formatCurrency(cents, debt.currency)} de ${debt.debtorName}?\n\nLa deuda pasará de ${formatCurrency(debt.amount, debt.currency)} a ${formatCurrency(debt.amount - cents, debt.currency)}.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Registrar',
+          onPress: () => {
+            partialPayDebt(debt.id, cents);
+            setPartialText('');
+          },
+        },
+      ],
+    );
+  }, [debt, partialText, partialPayDebt]);
 
   const handleDelete = useCallback(() => {
     Alert.alert(
@@ -227,10 +320,62 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
               <Text style={styles.metaValue}>{formatDateTime(debt.cycleStartedAt)}</Text>
             </View>
 
-            {/* Form */}
+            {/* Pago parcial */}
+            {isPending ? (
+              <>
+                <Text style={styles.sectionTitle} accessibilityRole="header">
+                  Pago parcial
+                </Text>
+                <Text style={styles.sectionHint}>
+                  Registra un abono sin cerrar la deuda. La cantidad se restará del monto pendiente.
+                </Text>
+                <View style={styles.partialRow}>
+                  <View style={{ flex: 1 }}>
+                    <Input
+                      label="Cantidad a abonar"
+                      placeholder="0.00"
+                      value={partialText}
+                      onChangeText={setPartialText}
+                      keyboardType="decimal-pad"
+                      maxLength={12}
+                      error={partialError}
+                    />
+                  </View>
+                  <View style={{ width: spacing.sm }} />
+                  <Button
+                    label="Abonar"
+                    onPress={handlePartialPay}
+                    accessibilityHint="Registra un pago parcial de la deuda"
+                  />
+                </View>
+              </>
+            ) : null}
+
+            {/* Form edición */}
             <Text style={styles.sectionTitle} accessibilityRole="header">
               Editar detalles
             </Text>
+
+            <Input
+              label="Nombre"
+              placeholder="Nombre del deudor"
+              value={debtorName}
+              onChangeText={setDebtorName}
+              autoCapitalize="words"
+              maxLength={60}
+              error={nameError}
+            />
+
+            <Input
+              label={`Cantidad (${settings.currency})`}
+              placeholder="0.00"
+              value={amountText}
+              onChangeText={setAmountText}
+              keyboardType="decimal-pad"
+              maxLength={12}
+              error={amountError}
+              hint="Introduce la cantidad en la unidad principal (no centavos)"
+            />
 
             <Input
               label="Descripción"
@@ -256,6 +401,78 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
               error={dueError}
               hint="Formato: AAAA-MM-DD (ej. 2026-06-15)"
             />
+
+            {/* Reactivation day for routine debts */}
+            {debt.kind === 'routine' && debt.frequency === 'monthly' ? (
+              <>
+                <Text style={styles.fieldLabel}>Día de reactivación mensual</Text>
+                <Text style={styles.sectionHint}>
+                  Día del mes en que se reabrirá la deuda. Si el mes no tiene ese día (ej: 31 en febrero), se usará el último día del mes.
+                </Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.dayScroll}
+                  contentContainerStyle={styles.dayScrollContent}
+                >
+                  {MONTH_DAYS.map(day => (
+                    <Pressable
+                      key={day}
+                      onPress={() => setReactivateDay(day)}
+                      style={[
+                        styles.dayChip,
+                        reactivateDay === day && styles.dayChipActive,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Día ${day}`}
+                      accessibilityState={{ selected: reactivateDay === day }}
+                    >
+                      <Text
+                        style={[
+                          styles.dayChipText,
+                          reactivateDay === day && styles.dayChipTextActive,
+                        ]}
+                      >
+                        {day}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </>
+            ) : null}
+
+            {debt.kind === 'routine' && debt.frequency === 'weekly' ? (
+              <>
+                <Text style={styles.fieldLabel}>Día de reactivación semanal</Text>
+                <Text style={styles.sectionHint}>
+                  Día de la semana en que se reabrirá la deuda.
+                </Text>
+                <View style={styles.weekDayRow}>
+                  {WEEK_DAYS.map(wd => (
+                    <Pressable
+                      key={wd.value}
+                      onPress={() => setReactivateWeekDay(wd.value)}
+                      style={[
+                        styles.weekDayChip,
+                        reactivateWeekDay === wd.value && styles.dayChipActive,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel={wd.label}
+                      accessibilityState={{ selected: reactivateWeekDay === wd.value }}
+                    >
+                      <Text
+                        style={[
+                          styles.dayChipText,
+                          reactivateWeekDay === wd.value && styles.dayChipTextActive,
+                        ]}
+                      >
+                        {wd.label.slice(0, 3)}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </>
+            ) : null}
 
             <TimeField
               label="Hora del recordatorio diario"
@@ -289,7 +506,12 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
                 </Text>
                 {debt.payments.map(p => (
                   <View key={p.id} style={styles.historyItem}>
-                    <Text style={styles.historyDate}>{formatDateTime(p.paidAt)}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.historyDate}>{formatDateTime(p.paidAt)}</Text>
+                      {p.isPartial ? (
+                        <Text style={styles.partialBadge}>Pago parcial</Text>
+                      ) : null}
+                    </View>
                     <Text style={styles.historyAmount}>
                       {formatCurrency(p.amount, debt.currency)}
                     </Text>
@@ -398,15 +620,81 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     marginBottom: spacing.md,
   },
+  sectionHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+    marginTop: -spacing.xs,
+  },
+  fieldLabel: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginBottom: spacing.sm,
+    marginTop: spacing.md,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   disabledHint: {
     ...typography.caption,
     color: colors.textMuted,
     marginTop: -spacing.sm,
     marginBottom: spacing.md,
   },
+  partialRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  dayScroll: {
+    marginBottom: spacing.md,
+  },
+  dayScrollContent: {
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+  },
+  dayChip: {
+    minWidth: 40,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  dayChipActive: {
+    backgroundColor: colors.paid,
+    borderColor: colors.paid,
+  },
+  dayChipText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  dayChipTextActive: {
+    color: '#000',
+    fontWeight: '800',
+  },
+  weekDayRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  weekDayChip: {
+    paddingHorizontal: spacing.md,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   historyItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     borderWidth: 1,
@@ -423,6 +711,12 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
+  },
+  partialBadge: {
+    ...typography.caption,
+    color: colors.routine,
+    fontWeight: '700',
+    marginTop: 2,
   },
   notFound: {
     flex: 1,

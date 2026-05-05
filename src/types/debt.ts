@@ -15,6 +15,9 @@ export type DebtKind = 'unique' | 'routine';
 
 export type Frequency = 'weekly' | 'monthly';
 
+/** 0 = domingo, 1 = lunes, …, 6 = sábado (estándar JS Date.getDay()). */
+export type WeekDay = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+
 export interface PaymentRecord {
   id: string;
   /** Fecha en la que se marcó el pago (ISO 8601). */
@@ -23,6 +26,8 @@ export interface PaymentRecord {
   amount: number;
   /** A qué ciclo correspondió este pago. */
   cycleStartedAt: string;
+  /** true si fue un pago parcial (no cerró el ciclo). */
+  isPartial?: boolean;
 }
 
 export interface Debt {
@@ -43,6 +48,12 @@ export interface Debt {
   /** Fecha prevista de pago (opcional). ISO date. Solo informativa. */
   dueDate?: string;
 
+  // ─── Rutinaria: día de reactivación ────────────────────────────────────
+  /** Día del mes (1-31) para reactivar deudas mensuales. Default: 1. */
+  reactivateDay?: number;
+  /** Día de la semana (0-6, 0=dom, 1=lun) para reactivar deudas semanales. Default: 1 (lunes). */
+  reactivateWeekDay?: WeekDay;
+
   // ─── Notificaciones ───────────────────────────────────────────────────
   /** Si el usuario activó la campana en esta deuda. */
   notificationsEnabled: boolean;
@@ -62,13 +73,19 @@ export interface NewDebtInput {
   currency: string;
   description?: string;
   frequency?: Frequency;
+  reactivateDay?: number;
+  reactivateWeekDay?: WeekDay;
 }
 
 /** Payload para editar una deuda existente. Solo campos editables. */
 export interface DebtEditInput {
+  debtorName?: string;
+  amount?: number;       // centavos
   description?: string;
   dueDate?: string | null;     // null = limpiar
   notifyHour?: number;
   notifyMinute?: number;
   notificationsEnabled?: boolean;
+  reactivateDay?: number;
+  reactivateWeekDay?: WeekDay;
 }

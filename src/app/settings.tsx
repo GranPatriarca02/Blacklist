@@ -7,6 +7,7 @@ import { CurrencyPickerModal } from '@/components/CurrencyPickerModal';
 import { IconButton } from '@/components/IconButton';
 import { ListItem } from '@/components/ListItem';
 import { useSettings } from '@/state/SettingsContext';
+import { useDebts } from '@/state/DebtsContext';
 import { getCurrency } from '@/lib/currencies';
 import { getStorageKind } from '@/lib/storage';
 import { isAvailable as notifAvailable } from '@/lib/notifications';
@@ -14,11 +15,17 @@ import { colors, spacing, typography } from '@/theme';
 
 export default function SettingsScreen() {
   const { settings, update } = useSettings();
+  const { changeAllCurrency } = useDebts();
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const current = getCurrency(settings.currency);
   const storageKind = getStorageKind();
   const notifsOK = notifAvailable();
+
+  const handleCurrencySelect = (code: string) => {
+    update({ currency: code });
+    changeAllCurrency(code);
+  };
 
   return (
     <Background>
@@ -42,7 +49,7 @@ export default function SettingsScreen() {
             subtitle={current.name}
             trailing={`${current.flag}  ${current.code}`}
             onPress={() => setPickerOpen(true)}
-            accessibilityHint="Abre el selector de divisa"
+            accessibilityHint="Abre el selector de divisa. Cambiará la divisa de todas las deudas."
             showChevron
           />
 
@@ -91,7 +98,7 @@ export default function SettingsScreen() {
         <CurrencyPickerModal
           visible={pickerOpen}
           selected={settings.currency}
-          onSelect={(code) => update({ currency: code })}
+          onSelect={handleCurrencySelect}
           onClose={() => setPickerOpen(false)}
         />
       </SafeAreaView>

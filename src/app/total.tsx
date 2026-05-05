@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -16,6 +16,7 @@ import { colors, radius, spacing, typography } from '@/theme';
 export default function TotalScreen() {
   const { debts } = useDebts();
   const { settings, update } = useSettings();
+  const syncingRef = useRef(false);
 
   const total = useMemo(() => totalOwed(debts), [debts]);
   const pendingCount = useMemo(() => debts.filter(d => !d.cyclePaidAt).length, [debts]);
@@ -30,19 +31,23 @@ export default function TotalScreen() {
   );
 
   // Re-sincroniza notificación del total cuando cambian deudas o settings.
-  useEffect(() => {
-    void syncTotalNotification(debts, settings).then(newId => {
+  // Usa un ref para evitar bucle infinito al actualizar totalNotificationId.
+  const syncNotif = useCallback(async () => {
+    if (syncingRef.current) return;
+    syncingRef.current = true;
+    try {
+      const newId = await syncTotalNotification(debts, settings);
       if (newId !== settings.totalNotificationId) {
         update({ totalNotificationId: newId ?? undefined });
       }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    debts,
-    settings.totalNotificationsEnabled,
-    settings.totalNotifyHour,
-    settings.totalNotifyMinute,
-  ]);
+    } finally {
+      syncingRef.current = false;
+    }
+  }, [debts, settings.totalNotificationsEnabled, settings.totalNotifyHour, settings.totalNotifyMinute, settings.currency]);
+
+  useEffect(() => {
+    void syncNotif();
+  }, [syncNotif]);
 
   const handleToggleBell = async () => {
     if (!settings.totalNotificationsEnabled) {

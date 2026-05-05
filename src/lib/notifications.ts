@@ -128,22 +128,23 @@ export function bodyForDebt(debt: Debt, now: Date = new Date()): string {
   return `${debt.debtorName} te debe ${amount}. Lleva ${formatElapsed(elapsed)} sin pagar.`;
 }
 
-/** Construye el body de la notificación del total. */
-export function bodyForTotal(debts: Debt[]): { title: string; body: string } {
+/**
+ * Construye el body de la notificación del total.
+ * Usa settings.currency para mostrar el total en la divisa global actual.
+ */
+export function bodyForTotal(debts: Debt[], currency?: string): { title: string; body: string } {
   const pending = debts.filter(d => !d.cyclePaidAt);
   if (pending.length === 0) {
     return { title: 'Blacklist 💀$', body: pickDebtFreeMessage() };
   }
   const total = pending.reduce((acc, d) => acc + d.amount, 0);
-  // Asume divisa única; si hay múltiples, mostramos la primera con un sufijo "+ otras"
-  const currencies = new Set(pending.map(d => d.currency));
-  const primary = pending[0].currency;
-  const totalStr = formatCurrency(total, primary);
+  // Usa la divisa global (settings.currency) si se proporciona, sino la primera deuda
+  const displayCurrency = currency || pending[0].currency;
+  const totalStr = formatCurrency(total, displayCurrency);
   const peopleStr = `${pending.length} ${pending.length === 1 ? 'persona' : 'personas'}`;
-  const multi = currencies.size > 1 ? ' (divisa principal)' : '';
   return {
     title: 'Blacklist 💀$',
-    body: `Te deben ${totalStr}${multi}. ${peopleStr} pendientes.`,
+    body: `Te deben ${totalStr}. ${peopleStr} pendientes.`,
   };
 }
 
@@ -177,7 +178,7 @@ export async function syncTotalNotification(
 ): Promise<string | null> {
   await cancelScheduled(settings.totalNotificationId);
   if (!settings.totalNotificationsEnabled) return null;
-  const { title, body } = bodyForTotal(debts);
+  const { title, body } = bodyForTotal(debts, settings.currency);
   return scheduleDaily({
     title,
     body,

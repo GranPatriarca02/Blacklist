@@ -5,13 +5,51 @@ import { createId } from './id';
  * Lógica pura de ciclos de deuda. Sin React, sin storage. Fácil de testear.
  */
 
-/** Suma una frecuencia a una fecha ISO y devuelve la nueva fecha ISO. */
-export function addFrequency(iso: string, frequency: Frequency): string {
+/**
+ * Calcula la próxima fecha de reactivación para una rutinaria,
+ * respetando el día configurado por el usuario.
+ *
+ * - Mensual: avanza al mismo `reactivateDay` del mes siguiente.
+ *   Si el mes no tiene ese día (ej: 31 feb), usa el último día del mes.
+ * - Semanal: avanza 7 días desde el inicio del ciclo, luego ajusta
+ *   al `reactivateWeekDay` configurado (por defecto lunes).
+ */
+export function addFrequency(
+  iso: string,
+  frequency: Frequency,
+  reactivateDay?: number,
+  reactivateWeekDay?: number,
+): string {
   const d = new Date(iso);
   if (frequency === 'weekly') {
+    // Avanza 7 días base
     d.setDate(d.getDate() + 7);
+    // Si hay un día de semana configurado, ajustar
+    const targetDay = reactivateWeekDay ?? 1; // 1 = lunes por defecto
+    const currentDay = d.getDay();
+    const diff = targetDay - currentDay;
+    // Ajustar al día de la semana más cercano hacia adelante (o mismo día)
+    if (diff !== 0) {
+      // Si diff es negativo, significa que el día ya pasó esta semana, ajustar
+      d.setDate(d.getDate() + ((diff + 7) % 7 || 7));
+      // Pero si eso nos pone demasiado lejos (>7 días del original+7),
+      // volver atrás 7 días
+      const originalPlus7 = new Date(iso);
+      originalPlus7.setDate(originalPlus7.getDate() + 7);
+      if (d.getTime() - originalPlus7.getTime() > 7 * 86_400_000) {
+        d.setDate(d.getDate() - 7);
+      }
+    }
   } else {
-    d.setMonth(d.getMonth() + 1);
+    // Mensual
+    const targetDay = reactivateDay ?? 1; // 1 por defecto
+    const nextMonth = d.getMonth() + 1;
+    const nextYear = d.getFullYear() + (nextMonth > 11 ? 1 : 0);
+    const actualMonth = nextMonth % 12;
+    // Obtener último día del mes destino
+    const lastDay = new Date(nextYear, actualMonth + 1, 0).getDate();
+    const safeDay = Math.min(targetDay, lastDay);
+    d.setFullYear(nextYear, actualMonth, safeDay);
   }
   return d.toISOString();
 }
@@ -19,7 +57,12 @@ export function addFrequency(iso: string, frequency: Frequency): string {
 /** Próxima fecha de reapertura para una rutinaria pagada. */
 export function nextDueDate(debt: Debt): string | null {
   if (debt.kind !== 'routine' || !debt.frequency) return null;
-  return addFrequency(debt.cycleStartedAt, debt.frequency);
+  return addFrequency(
+    debt.cycleStartedAt,
+    debt.frequency,
+    debt.reactivateDay,
+    debt.reactivateWeekDay,
+  );
 }
 
 /** Crea una deuda nueva con todos los campos derivados ya rellenos. */
@@ -36,6 +79,8 @@ export function createDebt(input: NewDebtInput, now: Date = new Date()): Debt {
     currency: input.currency,
     description: input.description?.trim() || undefined,
     frequency: input.kind === 'routine' ? input.frequency : undefined,
+    reactivateDay: input.reactivateDay,
+    reactivateWeekDay: input.reactivateWeekDay,
     createdAt: iso,
     cycleStartedAt: iso,
     cyclePaidAt: null,
@@ -56,10 +101,13 @@ export function migrateDebt(d: any): Debt {
     notifyMinute: typeof d.notifyMinute === 'number' ? d.notifyMinute : 0,
     notificationId: d.notificationId,
     dueDate: d.dueDate,
+    reactivateDay: d.reactivateDay,
+    reactivateWeekDay: d.reactivateWeekDay,
+    payments: Array.isArray(d.payments) ? d.payments : [],
   } as Debt;
 }
 
-/** Marca el ciclo actual como pagado. */
+/** Marca el ciclo actual como pagado (pago completo). */
 export function markPaid(debt: Debt, paidAmount?: number, now: Date = new Date()): Debt {
   if (debt.cyclePaidAt) return debt;
 
@@ -79,6 +127,38 @@ export function markPaid(debt: Debt, paidAmount?: number, now: Date = new Date()
   return reconcile(updated, now);
 }
 
+/** Registra un pago parcial: resta la cantidad de la deuda sin cerrar el ciclo. */
+export function makePartialPayment(debt: Debt, amountCents: number, now: Date = new Date()): Debt {
+  if (debt.cyclePaidAt) return debt; // ya pagada
+  if (amountCents <= 0) return debt;
+
+  const payment: PaymentRecord = {
+    id: createId(),
+    paidAt: now.toISOString(),
+    amount: amountCents,
+    cycleStartedAt: debt.cycleStartedAt,
+    isPartial: true,
+  };
+
+  const newAmount = Math.max(0, debt.amount - amountCents);
+
+  // Si el pago parcial cubre toda la deuda, marcar como pagada
+  if (newAmount === 0) {
+    return {
+      ...debt,
+      amount: 0,
+      cyclePaidAt: now.toISOString(),
+      payments: [...debt.payments, payment],
+    };
+  }
+
+  return {
+    ...debt,
+    amount: newAmount,
+    payments: [...debt.payments, payment],
+  };
+}
+
 /** Reconciliación: si una rutinaria está pagada y su próxima fecha ya pasó, avanza. */
 export function reconcile(debt: Debt, now: Date = new Date()): Debt {
   if (debt.kind !== 'routine' || !debt.frequency || !debt.cyclePaidAt) {
@@ -90,7 +170,7 @@ export function reconcile(debt: Debt, now: Date = new Date()): Debt {
   let safety = 0;
 
   while (paid && safety++ < 1000) {
-    const next = addFrequency(cycleStart, debt.frequency);
+    const next = addFrequency(cycleStart, debt.frequency, debt.reactivateDay, debt.reactivateWeekDay);
     if (nowMs < new Date(next).getTime()) break;
     cycleStart = next;
     paid = null;

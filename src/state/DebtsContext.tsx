@@ -11,6 +11,7 @@ import React, {
 import type { Debt, DebtEditInput, NewDebtInput } from '@/types/debt';
 import {
   createDebt,
+  makePartialPayment,
   markPaid,
   migrateDebt,
   reconcileAll,
@@ -40,7 +41,8 @@ type Action =
   | { type: 'ADD'; debt: Debt }
   | { type: 'REPLACE'; debt: Debt }
   | { type: 'REMOVE'; id: string }
-  | { type: 'RECONCILE' };
+  | { type: 'RECONCILE' }
+  | { type: 'SET_ALL'; debts: Debt[] };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -57,6 +59,8 @@ function reducer(state: State, action: Action): State {
       return { ...state, debts: state.debts.filter(d => d.id !== action.id) };
     case 'RECONCILE':
       return { ...state, debts: reconcileAll(state.debts) };
+    case 'SET_ALL':
+      return { ...state, debts: action.debts };
     default:
       return state;
   }
@@ -67,9 +71,12 @@ interface DebtsContextValue {
   debts: Debt[];
   addDebt: (input: NewDebtInput) => Debt;
   payDebt: (id: string, amount?: number) => void;
+  partialPayDebt: (id: string, amountCents: number) => void;
   removeDebt: (id: string) => void;
   /** Edita campos de detalle de una deuda existente. */
   editDebt: (id: string, patch: DebtEditInput) => void;
+  /** Cambia la divisa de TODAS las deudas (y sus notificaciones). */
+  changeAllCurrency: (newCurrency: string) => void;
 }
 
 const DebtsContext = createContext<DebtsContextValue | null>(null);
@@ -130,6 +137,22 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
     [state.debts],
   );
 
+  const partialPayDebt = useCallback(
+    (id: string, amountCents: number) => {
+      const target = state.debts.find(d => d.id === id);
+      if (!target) return;
+      const updated = makePartialPayment(target, amountCents);
+      dispatch({ type: 'REPLACE', debt: updated });
+      // Re-sync notification (amount changed, or debt fully paid)
+      void syncDebtNotification(updated).then(newId => {
+        if (newId !== updated.notificationId) {
+          dispatch({ type: 'REPLACE', debt: { ...updated, notificationId: newId ?? undefined } });
+        }
+      });
+    },
+    [state.debts],
+  );
+
   const removeDebt = useCallback(
     (id: string) => {
       const target = state.debts.find(d => d.id === id);
@@ -149,11 +172,15 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
       // Aplicar patch (con normalización de dueDate null -> undefined para limpiar)
       const merged: Debt = {
         ...target,
+        ...(patch.debtorName !== undefined ? { debtorName: patch.debtorName.trim() } : {}),
+        ...(patch.amount !== undefined ? { amount: patch.amount } : {}),
         ...(patch.description !== undefined ? { description: patch.description.trim() || undefined } : {}),
         ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate ?? undefined } : {}),
         ...(patch.notifyHour !== undefined ? { notifyHour: patch.notifyHour } : {}),
         ...(patch.notifyMinute !== undefined ? { notifyMinute: patch.notifyMinute } : {}),
         ...(patch.notificationsEnabled !== undefined ? { notificationsEnabled: patch.notificationsEnabled } : {}),
+        ...(patch.reactivateDay !== undefined ? { reactivateDay: patch.reactivateDay } : {}),
+        ...(patch.reactivateWeekDay !== undefined ? { reactivateWeekDay: patch.reactivateWeekDay } : {}),
       };
 
       dispatch({ type: 'REPLACE', debt: merged });
@@ -162,12 +189,32 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
       const notifFieldsTouched =
         patch.notificationsEnabled !== undefined ||
         patch.notifyHour !== undefined ||
-        patch.notifyMinute !== undefined;
+        patch.notifyMinute !== undefined ||
+        patch.debtorName !== undefined ||
+        patch.amount !== undefined;
       if (notifFieldsTouched) {
         void syncDebtNotification(merged).then(newId => {
           dispatch({ type: 'REPLACE', debt: { ...merged, notificationId: newId ?? undefined } });
         });
       }
+    },
+    [state.debts],
+  );
+
+  const changeAllCurrency = useCallback(
+    (newCurrency: string) => {
+      const updated = state.debts.map(d => ({ ...d, currency: newCurrency }));
+      dispatch({ type: 'SET_ALL', debts: updated });
+      // Re-sync all notifications with new currency
+      updated.forEach(d => {
+        if (d.notificationsEnabled) {
+          void syncDebtNotification(d).then(newId => {
+            if (newId !== d.notificationId) {
+              dispatch({ type: 'REPLACE', debt: { ...d, notificationId: newId ?? undefined } });
+            }
+          });
+        }
+      });
     },
     [state.debts],
   );
@@ -178,10 +225,12 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
       debts: state.debts,
       addDebt,
       payDebt,
+      partialPayDebt,
       removeDebt,
       editDebt,
+      changeAllCurrency,
     }),
-    [state.loaded, state.debts, addDebt, payDebt, removeDebt, editDebt],
+    [state.loaded, state.debts, addDebt, payDebt, partialPayDebt, removeDebt, editDebt, changeAllCurrency],
   );
 
   return <DebtsContext.Provider value={value}>{children}</DebtsContext.Provider>;

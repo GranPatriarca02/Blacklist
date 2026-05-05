@@ -17,8 +17,8 @@ import { SegmentedControl, type Segment } from '@/components/SegmentedControl';
 import { useDebts } from '@/state/DebtsContext';
 import { useSettings } from '@/state/SettingsContext';
 import { getCurrency } from '@/lib/currencies';
-import type { DebtKind, Frequency, NewDebtInput } from '@/types/debt';
-import { a11y, colors, spacing, typography } from '@/theme';
+import type { DebtKind, Frequency, NewDebtInput, WeekDay } from '@/types/debt';
+import { a11y, colors, radius, spacing, typography } from '@/theme';
 
 const KIND_SEGMENTS: ReadonlyArray<Segment<DebtKind>> = [
   {
@@ -38,6 +38,18 @@ const FREQ_SEGMENTS: ReadonlyArray<Segment<Frequency>> = [
   { value: 'monthly', label: 'Mensual' },
 ];
 
+const WEEK_DAYS: { value: WeekDay; label: string }[] = [
+  { value: 1, label: 'Lunes' },
+  { value: 2, label: 'Martes' },
+  { value: 3, label: 'Miércoles' },
+  { value: 4, label: 'Jueves' },
+  { value: 5, label: 'Viernes' },
+  { value: 6, label: 'Sábado' },
+  { value: 0, label: 'Domingo' },
+];
+
+const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
+
 interface FormErrors {
   debtorName?: string;
   amount?: string;
@@ -54,6 +66,8 @@ export default function AddDebtModal() {
   const [amountText, setAmountText] = useState('');
   const [description, setDescription] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
+  const [reactivateDay, setReactivateDay] = useState(1);
+  const [reactivateWeekDay, setReactivateWeekDay] = useState<WeekDay>(1);
 
   /** Convierte "12.50" / "12,50" / "12" a centavos. Devuelve null si inválido. */
   const amountCents = useMemo<number | null>(() => {
@@ -83,11 +97,13 @@ export default function AddDebtModal() {
       currency: settings.currency,
       description: description.trim() || undefined,
       frequency: kind === 'routine' ? frequency : undefined,
+      reactivateDay: kind === 'routine' && frequency === 'monthly' ? reactivateDay : undefined,
+      reactivateWeekDay: kind === 'routine' && frequency === 'weekly' ? reactivateWeekDay : undefined,
     };
 
     addDebt(input);
     router.back();
-  }, [kind, frequency, debtorName, amountCents, description, validate, addDebt]);
+  }, [kind, frequency, debtorName, amountCents, description, reactivateDay, reactivateWeekDay, validate, addDebt]);
 
   const handleCancel = useCallback(() => {
     router.back();
@@ -179,6 +195,77 @@ export default function AddDebtModal() {
                 <Text style={styles.freqHint}>
                   Al marcarla pagada, se reabrirá automáticamente cada {frequency === 'weekly' ? 'semana' : 'mes'}.
                 </Text>
+
+                {/* Reactivation day selector */}
+                {frequency === 'monthly' ? (
+                  <>
+                    <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>
+                      Día de reactivación
+                    </Text>
+                    <Text style={styles.freqHint}>
+                      Si el mes no tiene ese día (ej: 31 en febrero), se usará el último día del mes.
+                    </Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.dayScroll}
+                      contentContainerStyle={styles.dayScrollContent}
+                    >
+                      {MONTH_DAYS.map(day => (
+                        <Pressable
+                          key={day}
+                          onPress={() => setReactivateDay(day)}
+                          style={[
+                            styles.dayChip,
+                            reactivateDay === day && styles.dayChipActive,
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Día ${day}`}
+                          accessibilityState={{ selected: reactivateDay === day }}
+                        >
+                          <Text
+                            style={[
+                              styles.dayChipText,
+                              reactivateDay === day && styles.dayChipTextActive,
+                            ]}
+                          >
+                            {day}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </ScrollView>
+                  </>
+                ) : (
+                  <>
+                    <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>
+                      Día de reactivación
+                    </Text>
+                    <View style={styles.weekDayRow}>
+                      {WEEK_DAYS.map(wd => (
+                        <Pressable
+                          key={wd.value}
+                          onPress={() => setReactivateWeekDay(wd.value)}
+                          style={[
+                            styles.weekDayChip,
+                            reactivateWeekDay === wd.value && styles.dayChipActive,
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityLabel={wd.label}
+                          accessibilityState={{ selected: reactivateWeekDay === wd.value }}
+                        >
+                          <Text
+                            style={[
+                              styles.dayChipText,
+                              reactivateWeekDay === wd.value && styles.dayChipTextActive,
+                            ]}
+                          >
+                            {wd.label.slice(0, 3)}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </>
+                )}
               </View>
             ) : null}
 
@@ -247,5 +334,52 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textMuted,
     marginTop: spacing.sm,
+  },
+  dayScroll: {
+    marginTop: spacing.sm,
+  },
+  dayScrollContent: {
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+  },
+  dayChip: {
+    minWidth: 40,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  dayChipActive: {
+    backgroundColor: colors.paid,
+    borderColor: colors.paid,
+  },
+  dayChipText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  dayChipTextActive: {
+    color: '#000',
+    fontWeight: '800',
+  },
+  weekDayRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+  },
+  weekDayChip: {
+    paddingHorizontal: spacing.md,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
