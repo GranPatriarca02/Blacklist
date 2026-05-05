@@ -46,8 +46,8 @@ const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 /**
  * Detalle + edición de una deuda.
  *
- * Edita: nombre, cantidad, descripción, fecha prevista de pago, hora de notificación,
- *        día de reactivación (rutinarias).
+ * Edita: nombre, cantidad, descripción, hora de notificación,
+ *        fecha prevista de pago (solo únicas), día de reactivación (rutinarias).
  * Acciones: pago completo, pago parcial, eliminar.
  */
 export default function DebtDetailScreen() {
@@ -123,7 +123,7 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
     debtorName !== debt.debtorName ||
     amountCents !== debt.amount ||
     description !== (debt.description ?? '') ||
-    dueDateText !== (debt.dueDate ? debt.dueDate.slice(0, 10) : '') ||
+    (debt.kind === 'unique' && dueDateText !== (debt.dueDate ? debt.dueDate.slice(0, 10) : '')) ||
     hour !== debt.notifyHour ||
     minute !== debt.notifyMinute ||
     (debt.kind === 'routine' && debt.frequency === 'monthly' && reactivateDay !== (debt.reactivateDay ?? 1)) ||
@@ -148,9 +148,9 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
       setAmountError(undefined);
     }
 
-    // Validación de fecha (formato YYYY-MM-DD opcional).
+    // Validación de fecha prevista (solo para deudas únicas).
     let dueDate: string | null = null;
-    if (dueDateText.trim()) {
+    if (debt.kind === 'unique' && dueDateText.trim()) {
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dueDateText.trim());
       if (!m) {
         setDueError('Formato esperado: AAAA-MM-DD (ej. 2026-06-15)');
@@ -175,7 +175,7 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
       debtorName,
       amount: amountCents,
       description,
-      dueDate,
+      ...(debt.kind === 'unique' ? { dueDate } : {}),
       notifyHour: hour,
       notifyMinute: minute,
       ...(debt.kind === 'routine' && debt.frequency === 'monthly' ? { reactivateDay } : {}),
@@ -388,19 +388,22 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
               optional
             />
 
-            <Input
-              label="Fecha prevista de pago"
-              placeholder="AAAA-MM-DD"
-              value={dueDateText}
-              onChangeText={setDueDateText}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="numbers-and-punctuation"
-              maxLength={10}
-              optional
-              error={dueError}
-              hint="Formato: AAAA-MM-DD (ej. 2026-06-15)"
-            />
+            {/* Fecha prevista de pago — solo para deudas únicas */}
+            {debt.kind === 'unique' ? (
+              <Input
+                label="Fecha prevista de pago"
+                placeholder="AAAA-MM-DD"
+                value={dueDateText}
+                onChangeText={setDueDateText}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="numbers-and-punctuation"
+                maxLength={10}
+                optional
+                error={dueError}
+                hint="Formato: AAAA-MM-DD (ej. 2026-06-15)"
+              />
+            ) : null}
 
             {/* Reactivation day for routine debts */}
             {debt.kind === 'routine' && debt.frequency === 'monthly' ? (

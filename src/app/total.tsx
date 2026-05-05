@@ -16,7 +16,13 @@ import { colors, radius, spacing, typography } from '@/theme';
 export default function TotalScreen() {
   const { debts } = useDebts();
   const { settings, update } = useSettings();
-  const syncingRef = useRef(false);
+
+  // Refs para sincronizar UNA sola vez al desmontar (o al toggle),
+  // no en cada keystroke de hora/minuto.
+  const debtsRef = useRef(debts);
+  const settingsRef = useRef(settings);
+  debtsRef.current = debts;
+  settingsRef.current = settings;
 
   const total = useMemo(() => totalOwed(debts), [debts]);
   const pendingCount = useMemo(() => debts.filter(d => !d.cyclePaidAt).length, [debts]);
@@ -30,24 +36,26 @@ export default function TotalScreen() {
     [monthly],
   );
 
-  // Re-sincroniza notificación del total cuando cambian deudas o settings.
-  // Usa un ref para evitar bucle infinito al actualizar totalNotificationId.
-  const syncNotif = useCallback(async () => {
-    if (syncingRef.current) return;
-    syncingRef.current = true;
-    try {
-      const newId = await syncTotalNotification(debts, settings);
-      if (newId !== settings.totalNotificationId) {
-        update({ totalNotificationId: newId ?? undefined });
-      }
-    } finally {
-      syncingRef.current = false;
+  /** Sincroniza la notificación del total con el estado actual. */
+  const doSync = useCallback(async () => {
+    const s = settingsRef.current;
+    const d = debtsRef.current;
+    const newId = await syncTotalNotification(d, s);
+    if (newId !== s.totalNotificationId) {
+      update({ totalNotificationId: newId ?? undefined });
     }
-  }, [debts, settings.totalNotificationsEnabled, settings.totalNotifyHour, settings.totalNotifyMinute, settings.currency]);
+  }, [update]);
 
+  // Sincronizar al desmontar la pantalla (el usuario ya terminó de ajustar hora).
   useEffect(() => {
-    void syncNotif();
-  }, [syncNotif]);
+    return () => {
+      if (settingsRef.current.totalNotificationsEnabled) {
+        void doSync();
+      }
+    };
+    // Solo al montar/desmontar
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleToggleBell = async () => {
     if (!settings.totalNotificationsEnabled) {
@@ -60,7 +68,14 @@ export default function TotalScreen() {
         return;
       }
     }
-    update({ totalNotificationsEnabled: !settings.totalNotificationsEnabled });
+    const newEnabled = !settings.totalNotificationsEnabled;
+    update({ totalNotificationsEnabled: newEnabled });
+    // Sincronizar inmediatamente al toggle (activar/desactivar campana)
+    setTimeout(async () => {
+      const s = { ...settingsRef.current, totalNotificationsEnabled: newEnabled };
+      const newId = await syncTotalNotification(debtsRef.current, s);
+      update({ totalNotificationId: newId ?? undefined });
+    }, 100);
   };
 
   return (

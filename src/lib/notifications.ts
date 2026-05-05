@@ -25,11 +25,13 @@ function getNotif(): any | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     notifModule = require('expo-notifications');
-    // Configurar handler para que se muestre incluso con app en foreground
+    // NO mostrar notificaciones en foreground: las notificaciones son
+    // recordatorios diarios, solo deben verse cuando la app está cerrada.
+    // Esto evita el bug de que "salte" la notificación al programarla.
     if (notifModule?.setNotificationHandler) {
       notifModule.setNotificationHandler({
         handleNotification: async () => ({
-          shouldShowAlert: true,
+          shouldShowAlert: false,
           shouldPlaySound: false,
           shouldSetBadge: false,
         }),
@@ -86,7 +88,13 @@ interface ScheduleArgs {
   data?: Record<string, unknown>;
 }
 
-/** Programa una notificación diaria que se repite. */
+/**
+ * Programa una notificación diaria que se repite.
+ *
+ * IMPORTANTE: En Expo SDK 52 el trigger DEBE incluir `type: 'daily'`.
+ * Sin él, la notificación se dispara inmediatamente en vez de esperar
+ * a la hora programada.
+ */
 export async function scheduleDaily(args: ScheduleArgs): Promise<string | null> {
   const N = getNotif();
   if (!N) return null;
@@ -99,12 +107,10 @@ export async function scheduleDaily(args: ScheduleArgs): Promise<string | null> 
         body: args.body,
         data: args.data ?? {},
       },
-      // Trigger diario nativo: la mejor batería + fiabilidad.
       trigger: {
+        type: 'daily',
         hour: args.hour,
         minute: args.minute,
-        repeats: true,
-        // En SDK 52 el campo "type" no es obligatorio para hour/minute.
       },
     });
     return id ?? null;
@@ -138,7 +144,6 @@ export function bodyForTotal(debts: Debt[], currency?: string): { title: string;
     return { title: 'Blacklist 💀$', body: pickDebtFreeMessage() };
   }
   const total = pending.reduce((acc, d) => acc + d.amount, 0);
-  // Usa la divisa global (settings.currency) si se proporciona, sino la primera deuda
   const displayCurrency = currency || pending[0].currency;
   const totalStr = formatCurrency(total, displayCurrency);
   const peopleStr = `${pending.length} ${pending.length === 1 ? 'persona' : 'personas'}`;

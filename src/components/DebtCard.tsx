@@ -137,7 +137,7 @@ export function DebtCard({ debt }: DebtCardProps) {
             {kindLabel}
           </Text>
         </View>
-        {debt.dueDate ? (
+        {debt.kind === 'unique' && debt.dueDate ? (
           <Text style={styles.dueLabel}>
             📅 Previsto: {formatDate(debt.dueDate)}
           </Text>
