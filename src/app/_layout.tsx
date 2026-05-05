@@ -1,17 +1,21 @@
-import React from 'react';
-import { View } from 'react-native';
+import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { useAssets } from 'expo-asset';
+import * as SplashScreen from 'expo-splash-screen';
 
 import { colors } from '@/theme';
 import { DebtsProvider } from '@/state/DebtsContext';
 
-// Assets a precargar antes de pintar la primera pantalla.
-// Evita el "flash" de carga de la imagen de fondo en pantallas frías.
-const FONDO = require('../../assets/fondo.jpg');
+/**
+ * Mantén el splash visible mientras la JS cargue. Llamar lo más pronto posible
+ * (a nivel de módulo, no dentro del componente) garantiza que se ejecute antes
+ * del primer render. Si esto falla por cualquier motivo, no rompe la app.
+ */
+SplashScreen.preventAutoHideAsync().catch(() => {
+  /* Ignora — algunos entornos (web, Snack) no soportan splash */
+});
 
 /**
  * Root Layout — se renderiza una sola vez al iniciar la app.
@@ -20,17 +24,21 @@ const FONDO = require('../../assets/fondo.jpg');
  *  1. GestureHandlerRootView   → requerido por React Navigation v7.
  *  2. SafeAreaProvider         → permite SafeAreaView en pantallas hijas.
  *  3. DebtsProvider            → estado global de deudas (AsyncStorage hidratado).
- *  4. Stack                    → router de Expo Router. Modales registrados aquí.
+ *  4. Stack                    → router. La pantalla `add-debt` se abre como modal.
+ *
+ * IMPORTANTE: NO bloqueamos el render esperando assets (eso causaba pantalla
+ * negra perma si `useAssets` no resolvía). El fondo se carga perezosamente
+ * dentro de <Background/>; mientras tanto verás el color sólido `#121212`.
  */
 export default function RootLayout() {
-  // Pre-carga del fondo para evitar parpadeo al abrir la app.
-  const [assets] = useAssets([FONDO]);
-
-  // Mientras los assets cargan, mostramos la pantalla negra (no spinner)
-  // — coherente con el tema oscuro y evita layout shift.
-  if (!assets) {
-    return <View style={{ flex: 1, backgroundColor: colors.background }} />;
-  }
+  useEffect(() => {
+    // Tras el primer paint, ocultamos el splash. Pequeño delay para evitar
+    // parpadeo entre splash y primer frame del UI.
+    const t = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    }, 50);
+    return () => clearTimeout(t);
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
