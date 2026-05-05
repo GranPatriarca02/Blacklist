@@ -7,33 +7,29 @@ import * as SplashScreen from 'expo-splash-screen';
 
 import { colors } from '@/theme';
 import { DebtsProvider } from '@/state/DebtsContext';
+import { SettingsProvider } from '@/state/SettingsContext';
+
+SplashScreen.preventAutoHideAsync().catch(() => { /* ignorable */ });
 
 /**
- * Mantén el splash visible mientras la JS cargue. Llamar lo más pronto posible
- * (a nivel de módulo, no dentro del componente) garantiza que se ejecute antes
- * del primer render. Si esto falla por cualquier motivo, no rompe la app.
- */
-SplashScreen.preventAutoHideAsync().catch(() => {
-  /* Ignora — algunos entornos (web, Snack) no soportan splash */
-});
-
-/**
- * Root Layout — se renderiza una sola vez al iniciar la app.
+ * Root Layout — montado una sola vez al iniciar.
  *
- * Capas (de fuera hacia dentro):
- *  1. GestureHandlerRootView   → requerido por React Navigation v7.
- *  2. SafeAreaProvider         → permite SafeAreaView en pantallas hijas.
- *  3. DebtsProvider            → estado global de deudas (AsyncStorage hidratado).
- *  4. Stack                    → router. La pantalla `add-debt` se abre como modal.
+ * Capas:
+ *  1. GestureHandlerRootView   → necesario para gestos de React Navigation v7.
+ *  2. SafeAreaProvider          → permite SafeAreaView en pantallas hijas.
+ *  3. SettingsProvider          → divisa, hora notificación total, etc.
+ *  4. DebtsProvider             → estado global de deudas + notificaciones.
+ *  5. Stack                     → router. Modales y rutas anidadas se registran aquí.
  *
- * IMPORTANTE: NO bloqueamos el render esperando assets (eso causaba pantalla
- * negra perma si `useAssets` no resolvía). El fondo se carga perezosamente
- * dentro de <Background/>; mientras tanto verás el color sólido `#121212`.
+ * Rutas registradas:
+ *  - `/`                  → Home (lista + FAB)
+ *  - `/add-debt`          → modal Slide-up para crear deuda
+ *  - `/debt/[id]`         → detalle/edición de una deuda
+ *  - `/settings`          → ajustes (divisa, diagnóstico)
+ *  - `/total`             → desglose mensual y notificación del total
  */
 export default function RootLayout() {
   useEffect(() => {
-    // Tras el primer paint, ocultamos el splash. Pequeño delay para evitar
-    // parpadeo entre splash y primer frame del UI.
     const t = setTimeout(() => {
       SplashScreen.hideAsync().catch(() => {});
     }, 50);
@@ -43,26 +39,40 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.background }}>
       <SafeAreaProvider>
-        <DebtsProvider>
-          <StatusBar style="light" backgroundColor={colors.background} />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: colors.background },
-              animation: 'fade',
-            }}
-          >
-            <Stack.Screen name="index" />
-            <Stack.Screen
-              name="add-debt"
-              options={{
-                presentation: 'modal',
-                animation: 'slide_from_bottom',
-                gestureEnabled: true,
+        <SettingsProvider>
+          <DebtsProvider>
+            <StatusBar style="light" backgroundColor={colors.background} />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: colors.background },
+                animation: 'fade',
               }}
-            />
-          </Stack>
-        </DebtsProvider>
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen
+                name="add-debt"
+                options={{
+                  presentation: 'modal',
+                  animation: 'slide_from_bottom',
+                  gestureEnabled: true,
+                }}
+              />
+              <Stack.Screen
+                name="debt/[id]"
+                options={{ animation: 'slide_from_right' }}
+              />
+              <Stack.Screen
+                name="settings"
+                options={{ animation: 'slide_from_right' }}
+              />
+              <Stack.Screen
+                name="total"
+                options={{ animation: 'slide_from_right' }}
+              />
+            </Stack>
+          </DebtsProvider>
+        </SettingsProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

@@ -1,70 +1,86 @@
 import React, { useMemo } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Background } from '@/components/Background';
 import { DebtCard } from '@/components/DebtCard';
 import { EmptyState } from '@/components/EmptyState';
 import { FAB } from '@/components/FAB';
+import { IconButton } from '@/components/IconButton';
 import { Title } from '@/components/Title';
 import { useDebts } from '@/state/DebtsContext';
+import { useSettings } from '@/state/SettingsContext';
 import { totalOwed } from '@/lib/debtCycles';
 import { formatCurrency } from '@/lib/format';
-import { colors, spacing, typography } from '@/theme';
+import { a11y, colors, radius, spacing, typography } from '@/theme';
 
-/**
- * Pantalla principal: lista de deudas + resumen + FAB para agregar.
- *
- * Orden:
- *  1. Pendientes primero (cyclePaidAt === null), más recientes arriba.
- *  2. Pagadas/en espera al final (rutinarias pagadas esperando próximo ciclo).
- */
 export default function HomeScreen() {
   const { loaded, debts } = useDebts();
+  const { settings } = useSettings();
 
   const sorted = useMemo(() => {
     return [...debts].sort((a, b) => {
-      // Pendientes primero
-      if (!!a.cyclePaidAt !== !!b.cyclePaidAt) {
-        return a.cyclePaidAt ? 1 : -1;
-      }
-      // Más antiguas (más tiempo sin pagar) primero entre pendientes
+      if (!!a.cyclePaidAt !== !!b.cyclePaidAt) return a.cyclePaidAt ? 1 : -1;
       return new Date(a.cycleStartedAt).getTime() - new Date(b.cycleStartedAt).getTime();
     });
   }, [debts]);
 
   const total = useMemo(() => totalOwed(debts), [debts]);
-  const pendingCount = useMemo(
-    () => debts.filter(d => !d.cyclePaidAt).length,
-    [debts],
-  );
-
-  const handleAdd = () => router.push('/add-debt');
+  const pendingCount = useMemo(() => debts.filter(d => !d.cyclePaidAt).length, [debts]);
 
   return (
     <Background>
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <View style={styles.header}>
-          <Title isScreenTitle>Blacklist 💀$</Title>
-          <View
-            style={styles.summary}
-            accessible
-            accessibilityRole="summary"
+          <View style={styles.titleRow}>
+            <Title isScreenTitle>Blacklist 💀$</Title>
+            <IconButton
+              onPress={() => router.push('/settings')}
+              accessibilityLabel="Abrir ajustes"
+              accessibilityHint="Cambia divisa y otras preferencias"
+              glyph="⚙"
+            />
+          </View>
+
+          <Pressable
+            onPress={() => router.push('/total')}
+            hitSlop={a11y.hitSlop}
+            accessibilityRole="button"
             accessibilityLabel={
               pendingCount === 0
-                ? 'No tienes deudas pendientes'
-                : `Te deben ${formatCurrency(total)} en total, distribuido en ${pendingCount} deuda${pendingCount === 1 ? '' : 's'}`
+                ? 'Resumen: no tienes deudas pendientes. Toca para configurar la notificación del total'
+                : `Resumen: te deben ${formatCurrency(total, settings.currency)} en total entre ${pendingCount} deuda${pendingCount === 1 ? '' : 's'}. Toca para ver desglose mensual y notificación`
             }
+            accessibilityHint="Abre el desglose mensual y la configuración de la notificación del total"
+            style={({ pressed }) => [styles.summary, pressed && { opacity: 0.85 }]}
           >
-            <View>
+            <View style={styles.summaryLeft}>
               <Text style={styles.summaryLabel}>Te deben</Text>
-              <Text style={styles.summaryValue}>{formatCurrency(total)}</Text>
+              <Text style={styles.summaryValue}>{formatCurrency(total, settings.currency)}</Text>
             </View>
-            <View style={styles.summaryRight}>
+            <View style={styles.summaryMid}>
               <Text style={styles.summaryLabel}>Pendientes</Text>
               <Text style={styles.summaryValue}>{pendingCount}</Text>
             </View>
-          </View>
+            <View style={styles.summaryRight}>
+              <Text
+                style={styles.bellEmoji}
+                allowFontScaling={false}
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+              >
+                {settings.totalNotificationsEnabled ? '🔔' : '🔕'}
+              </Text>
+              <Text
+                style={styles.chevron}
+                allowFontScaling={false}
+                accessibilityElementsHidden
+                importantForAccessibility="no"
+              >
+                ›
+              </Text>
+            </View>
+          </Pressable>
         </View>
 
         {!loaded ? (
@@ -88,7 +104,7 @@ export default function HomeScreen() {
         )}
 
         <FAB
-          onPress={handleAdd}
+          onPress={() => router.push('/add-debt')}
           accessibilityLabel="Agregar nueva deuda"
           accessibilityHint="Abre el formulario para registrar una deuda única o rutinaria"
           glyph="+"
@@ -105,18 +121,28 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     paddingBottom: spacing.lg,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   summary: {
     marginTop: spacing.md,
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'flex-end',
     backgroundColor: colors.surface,
-    borderRadius: 16,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     padding: spacing.md,
   },
-  summaryRight: { alignItems: 'flex-end' },
+  summaryLeft: { flex: 1 },
+  summaryMid: { alignItems: 'flex-end', marginRight: spacing.md },
+  summaryRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   summaryLabel: {
     ...typography.caption,
     color: colors.textMuted,
@@ -129,9 +155,17 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
     marginTop: 2,
   },
+  bellEmoji: {
+    fontSize: 20,
+    marginRight: spacing.xs,
+  },
+  chevron: {
+    fontSize: 28,
+    color: colors.textMuted,
+  },
   list: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: 120, // espacio para que el FAB no tape la última card
+    paddingBottom: 120,
   },
   loading: {
     flex: 1,

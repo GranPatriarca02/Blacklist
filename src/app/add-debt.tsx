@@ -15,6 +15,8 @@ import { Button } from '@/components/Button';
 import { Input } from '@/components/Input';
 import { SegmentedControl, type Segment } from '@/components/SegmentedControl';
 import { useDebts } from '@/state/DebtsContext';
+import { useSettings } from '@/state/SettingsContext';
+import { getCurrency } from '@/lib/currencies';
 import type { DebtKind, Frequency, NewDebtInput } from '@/types/debt';
 import { a11y, colors, spacing, typography } from '@/theme';
 
@@ -43,6 +45,8 @@ interface FormErrors {
 
 export default function AddDebtModal() {
   const { addDebt } = useDebts();
+  const { settings } = useSettings();
+  const currentCurrency = getCurrency(settings.currency);
 
   const [kind, setKind] = useState<DebtKind>('unique');
   const [frequency, setFrequency] = useState<Frequency>('monthly');
@@ -76,7 +80,7 @@ export default function AddDebtModal() {
       kind,
       debtorName: debtorName.trim(),
       amount: amountCents,
-      currency: 'USD',
+      currency: settings.currency,
       description: description.trim() || undefined,
       frequency: kind === 'routine' ? frequency : undefined,
     };
@@ -140,15 +144,15 @@ export default function AddDebtModal() {
             />
 
             <Input
-              label="Cantidad"
+              label={`Cantidad (${currentCurrency.code})`}
               placeholder="0.00"
               value={amountText}
               onChangeText={setAmountText}
               keyboardType="decimal-pad"
-              prefix="$"
+              prefix={currentCurrency.symbol}
               maxLength={12}
               error={errors.amount}
-              hint="Usa punto o coma para decimales"
+              hint={`Divisa: ${currentCurrency.name}. Cambia en ajustes si quieres otra.`}
             />
 
             <Input

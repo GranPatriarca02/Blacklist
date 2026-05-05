@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
 import { a11y, colors, radius, spacing, typography } from '@/theme';
 import type { Debt } from '@/types/debt';
 import { useElapsed } from '@/hooks/useElapsed';
@@ -11,21 +12,23 @@ import {
   formatElapsed,
   formatElapsedAccessible,
 } from '@/lib/format';
+import { ensurePermissions } from '@/lib/notifications';
+import { BellToggle } from './BellToggle';
 
 interface DebtCardProps {
   debt: Debt;
 }
 
 /**
- * Tarjeta de deuda con contador vivo.
+ * Tarjeta de deuda con contador vivo, bell rápida y tap para detalle.
  *
- * Estados visuales:
- *  1. Pendiente (cyclePaidAt === null) → contador rojo/ámbar tic-tac.
- *  2. Pagada única → bloque verde "Pagada el X".
- *  3. Rutinaria pagada esperando próximo ciclo → "Reabre el [fecha]".
+ * Tap simple → navega al detalle (`/debt/[id]`).
+ * Long-press → confirmación para eliminar.
+ * Bell → toggle rápido de notificaciones (con permisos lazy).
+ * "Pagada" → confirmación + markPaid.
  */
 export function DebtCard({ debt }: DebtCardProps) {
-  const { payDebt, removeDebt } = useDebts();
+  const { payDebt, removeDebt, editDebt } = useDebts();
 
   const isPending = debt.cyclePaidAt === null;
   const elapsedMs = useElapsed(debt.cycleStartedAt, isPending);
@@ -40,13 +43,17 @@ export function DebtCard({ debt }: DebtCardProps) {
     return debt.frequency === 'weekly' ? 'Rutinaria · semanal' : 'Rutinaria · mensual';
   }, [debt]);
 
+  const handleOpen = useCallback(() => {
+    router.push({ pathname: '/debt/[id]', params: { id: debt.id } });
+  }, [debt.id]);
+
   const handlePay = useCallback(() => {
     Alert.alert(
       'Marcar como pagada',
       `¿Confirmas que ${debt.debtorName} pagó ${formatCurrency(debt.amount, debt.currency)}?`,
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Sí, pagada', style: 'default', onPress: () => payDebt(debt.id) },
+        { text: 'Sí, pagada', onPress: () => payDebt(debt.id) },
       ],
     );
   }, [debt, payDebt]);
@@ -62,7 +69,21 @@ export function DebtCard({ debt }: DebtCardProps) {
     );
   }, [debt, removeDebt]);
 
-  // Etiqueta accesible compuesta para que el lector anuncie todo
+  const handleToggleBell = useCallback(async () => {
+    if (!debt.notificationsEnabled) {
+      const granted = await ensurePermissions();
+      if (!granted) {
+        Alert.alert(
+          'Permiso necesario',
+          'Para recibir recordatorios, activa las notificaciones de Blacklist en los ajustes del sistema.',
+          [{ text: 'Entendido' }],
+        );
+        return;
+      }
+    }
+    editDebt(debt.id, { notificationsEnabled: !debt.notificationsEnabled });
+  }, [debt, editDebt]);
+
   const a11yLabel = [
     `${debt.debtorName} te debe ${formatCurrency(debt.amount, debt.currency)}`,
     kindLabel,
@@ -72,18 +93,18 @@ export function DebtCard({ debt }: DebtCardProps) {
         ? `Pagada. Reabre el ${formatDate(reopensAt)}`
         : `Pagada el ${formatDate(debt.cyclePaidAt!)}`,
     debt.payments.length > 0 ? `${debt.payments.length} pagos en historial` : null,
-  ]
-    .filter(Boolean)
-    .join('. ');
+    debt.notificationsEnabled ? 'Notificaciones activas' : null,
+  ].filter(Boolean).join('. ');
 
   return (
     <Pressable
+      onPress={handleOpen}
       onLongPress={handleLongPress}
       hitSlop={a11y.hitSlop}
       accessible
       accessibilityRole="button"
       accessibilityLabel={a11yLabel}
-      accessibilityHint="Mantén presionado para eliminar"
+      accessibilityHint="Toca para ver detalles. Mantén presionado para eliminar."
       style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
     >
       <View style={styles.headerRow}>
@@ -94,13 +115,33 @@ export function DebtCard({ debt }: DebtCardProps) {
         </View>
 
         <View style={styles.info}>
-          <Text style={styles.name} numberOfLines={1}>
-            {debt.debtorName}
-          </Text>
+          <Text style={styles.name} numberOfLines={1}>{debt.debtorName}</Text>
           <Text style={styles.amount}>{formatCurrency(debt.amount, debt.currency)}</Text>
         </View>
 
-        <KindBadge kind={kindLabel} pending={isPending} />
+        <BellToggle
+          enabled={debt.notificationsEnabled}
+          onToggle={handleToggleBell}
+          contextLabel={debt.debtorName}
+          size="sm"
+        />
+      </View>
+
+      <View style={styles.kindRow}>
+        <View
+          style={[styles.badge, { backgroundColor: isPending ? colors.urgentBg : colors.paidBg }]}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        >
+          <Text style={[styles.badgeText, { color: isPending ? colors.urgent : colors.paid }]}>
+            {kindLabel}
+          </Text>
+        </View>
+        {debt.dueDate ? (
+          <Text style={styles.dueLabel}>
+            📅 Previsto: {formatDate(debt.dueDate)}
+          </Text>
+        ) : null}
       </View>
 
       {debt.description ? (
@@ -158,29 +199,6 @@ export function DebtCard({ debt }: DebtCardProps) {
   );
 }
 
-function KindBadge({ kind, pending }: { kind: string; pending: boolean }) {
-  return (
-    <View
-      style={[
-        styles.badge,
-        { backgroundColor: pending ? colors.urgentBg : colors.paidBg },
-      ]}
-      accessibilityElementsHidden
-      importantForAccessibility="no"
-    >
-      <Text
-        style={[
-          styles.badgeText,
-          { color: pending ? colors.urgent : colors.paid },
-        ]}
-        numberOfLines={1}
-      >
-        {kind}
-      </Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
@@ -220,6 +238,13 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: 2,
   },
+  kindRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
   badge: {
     paddingHorizontal: spacing.sm,
     paddingVertical: 4,
@@ -228,6 +253,10 @@ const styles = StyleSheet.create({
   badgeText: {
     ...typography.caption,
     fontWeight: '700',
+  },
+  dueLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   description: {
     ...typography.body,

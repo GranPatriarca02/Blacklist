@@ -15,14 +15,21 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.charlie.blacklist"
+      "bundleIdentifier": "com.charlie.blacklist",
+      "infoPlist": {
+        "NSUserNotificationUsageDescription": "Te avisamos cuando alguien tenga una deuda pendiente o si hoy nadie te debe."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/icono.jpeg",
         "backgroundColor": "#121212"
       },
-      "package": "com.charlie.blacklist"
+      "package": "com.charlie.blacklist",
+      "permissions": [
+        "NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -32,6 +39,12 @@
     "plugins": [
       "expo-router",
       "expo-asset",
+      [
+        "expo-notifications",
+        {
+          "color": "#FFFFFF"
+        }
+      ],
       [
         "expo-build-properties",
         {
