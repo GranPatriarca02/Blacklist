@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -8,6 +8,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { colors } from '@/theme';
 import { DebtsProvider } from '@/state/DebtsContext';
 import { SettingsProvider } from '@/state/SettingsContext';
+import { setupNotificationResponseHandler } from '@/lib/notifications';
 
 SplashScreen.preventAutoHideAsync().catch(() => { /* ignorable */ });
 
@@ -34,6 +35,20 @@ export default function RootLayout() {
       SplashScreen.hideAsync().catch(() => {});
     }, 50);
     return () => clearTimeout(t);
+  }, []);
+
+  // Deep-link de notificaciones: al tocar una notif, navegamos a su pantalla.
+  useEffect(() => {
+    const unsub = setupNotificationResponseHandler((data) => {
+      const debtId = typeof data.debtId === 'string' ? data.debtId : null;
+      const kind = typeof data.kind === 'string' ? data.kind : null;
+      if (debtId) {
+        router.push({ pathname: '/debt/[id]', params: { id: debtId } });
+      } else if (kind === 'total') {
+        router.push('/total');
+      }
+    });
+    return unsub;
   }, []);
 
   return (

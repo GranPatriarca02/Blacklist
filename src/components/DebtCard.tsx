@@ -1,6 +1,7 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
+import { MemberPaymentModal } from './MemberPaymentModal';
 import { a11y, colors, radius, spacing, typography } from '@/theme';
 import type { Debt } from '@/types/debt';
 import { useElapsed } from '@/hooks/useElapsed';
@@ -28,7 +29,8 @@ interface DebtCardProps {
  * "Pagada" → confirmación + markPaid.
  */
 export function DebtCard({ debt }: DebtCardProps) {
-  const { payDebt, removeDebt, editDebt } = useDebts();
+  const { payDebt, removeDebt, editDebt, payGroupMembers } = useDebts();
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
 
   const isPending = debt.cyclePaidAt === null;
   const elapsedMs = useElapsed(debt.cycleStartedAt, isPending);
@@ -195,13 +197,18 @@ export function DebtCard({ debt }: DebtCardProps) {
           </Pressable>
         ) : isPending && debt.kind === 'group' ? (
           <Pressable
-            onPress={handleOpen}
+            onPress={(e) => {
+              // Stop propagation to avoid the parent Pressable opening the detail
+              e.stopPropagation?.();
+              setGroupModalOpen(true);
+            }}
             hitSlop={a11y.hitSlop}
             accessibilityRole="button"
-            accessibilityLabel={`Ver miembros del grupo ${debt.debtorName}`}
-            style={({ pressed }) => [styles.openBtn, pressed && { opacity: 0.7 }]}
+            accessibilityLabel={`Pagar deuda grupal ${debt.debtorName}`}
+            accessibilityHint="Abre la lista para seleccionar quiénes pagan"
+            style={({ pressed }) => [styles.payBtn, pressed && { opacity: 0.7 }]}
           >
-            <Text style={styles.openBtnText}>Ver miembros</Text>
+            <Text style={styles.payBtnText}>Pagar</Text>
           </Pressable>
         ) : null}
       </View>
@@ -214,6 +221,20 @@ export function DebtCard({ debt }: DebtCardProps) {
           📒 {debt.payments.length} pago{debt.payments.length === 1 ? '' : 's'} registrado
           {debt.payments.length === 1 ? '' : 's'}
         </Text>
+      ) : null}
+
+      {debt.kind === 'group' && debt.members ? (
+        <MemberPaymentModal
+          visible={groupModalOpen}
+          members={debt.members}
+          currency={debt.currency}
+          debtTitle={debt.debtorName}
+          onClose={() => setGroupModalOpen(false)}
+          onConfirm={(ids) => {
+            payGroupMembers(debt.id, ids);
+            setGroupModalOpen(false);
+          }}
+        />
       ) : null}
     </Pressable>
   );

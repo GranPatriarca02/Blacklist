@@ -12,6 +12,7 @@ import type { Debt, DebtEditInput, NewDebtInput } from '@/types/debt';
 import {
   createDebt,
   makePartialPayment,
+  markGroupMembersPaid,
   markPaid,
   migrateDebt,
   reconcileAll,
@@ -80,6 +81,8 @@ interface DebtsContextValue {
   changeAllCurrency: (newCurrency: string) => void;
   /** Para grupales: marca/des-marca a un miembro como pagado. */
   toggleGroupMember: (debtId: string, memberId: string) => void;
+  /** Para grupales: marca un set de miembros como pagados en un solo paso. */
+  payGroupMembers: (debtId: string, memberIds: string[]) => void;
 }
 
 const DebtsContext = createContext<DebtsContextValue | null>(null);
@@ -240,6 +243,22 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
     [state.debts],
   );
 
+  const payGroupMembers = useCallback(
+    (debtId: string, memberIds: string[]) => {
+      const target = state.debts.find(d => d.id === debtId);
+      if (!target || target.kind !== 'group') return;
+      const updated = markGroupMembersPaid(target, memberIds);
+      if (updated === target) return; // nada que cambiar
+      dispatch({ type: 'REPLACE', debt: updated });
+      void syncDebtNotification(updated).then(newId => {
+        if (newId !== updated.notificationId) {
+          dispatch({ type: 'REPLACE', debt: { ...updated, notificationId: newId ?? undefined } });
+        }
+      });
+    },
+    [state.debts],
+  );
+
   const value = useMemo<DebtsContextValue>(
     () => ({
       loaded: state.loaded,
@@ -251,8 +270,9 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
       editDebt,
       changeAllCurrency,
       toggleGroupMember,
+      payGroupMembers,
     }),
-    [state.loaded, state.debts, addDebt, payDebt, partialPayDebt, removeDebt, editDebt, changeAllCurrency, toggleGroupMember],
+    [state.loaded, state.debts, addDebt, payDebt, partialPayDebt, removeDebt, editDebt, changeAllCurrency, toggleGroupMember, payGroupMembers],
   );
 
   return <DebtsContext.Provider value={value}>{children}</DebtsContext.Provider>;

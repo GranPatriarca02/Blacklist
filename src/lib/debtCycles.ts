@@ -139,6 +139,51 @@ export function sumMembers(members: ReadonlyArray<GroupMember>): number {
 }
 
 /**
+ * Marca varios miembros como pagados de una vez (batch).
+ *
+ * - Idempotente: miembros ya pagados se ignoran.
+ * - Genera un PaymentRecord por cada uno con `paidAt` = now.
+ * - Si todos los miembros quedan pagados → `cyclePaidAt` se rellena.
+ *
+ * Usado por la modal de selección "quién paga" tanto desde la card del Home
+ * como desde el botón global de la pantalla de detalle.
+ */
+export function markGroupMembersPaid(
+  debt: Debt,
+  memberIds: ReadonlyArray<string>,
+  now: Date = new Date(),
+): Debt {
+  if (debt.kind !== 'group' || !debt.members) return debt;
+  if (memberIds.length === 0) return debt;
+
+  const idSet = new Set(memberIds);
+  const nowIso = now.toISOString();
+  const newPayments: PaymentRecord[] = [];
+  const newMembers = debt.members.map(m => {
+    if (!idSet.has(m.id) || m.paidAt) return m; // ignora ya pagados o no seleccionados
+    newPayments.push({
+      id: createId(),
+      paidAt: nowIso,
+      amount: m.amount,
+      cycleStartedAt: debt.cycleStartedAt,
+      memberId: m.id,
+      memberName: m.name,
+    });
+    return { ...m, paidAt: nowIso };
+  });
+
+  if (newPayments.length === 0) return debt;
+
+  const allPaid = newMembers.every(m => m.paidAt !== null);
+  return {
+    ...debt,
+    members: newMembers,
+    payments: [...debt.payments, ...newPayments],
+    cyclePaidAt: allPaid ? nowIso : null,
+  };
+}
+
+/**
  * Marca un miembro como pagado o lo des-marca (toggle).
  * Si todos los miembros quedan pagados → `cyclePaidAt` se rellena.
  * Si alguno se des-paga → `cyclePaidAt` vuelve a null.

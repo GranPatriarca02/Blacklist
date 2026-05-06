@@ -18,6 +18,7 @@ import { Button } from '@/components/Button';
 import { Checkbox } from '@/components/Checkbox';
 import { IconButton } from '@/components/IconButton';
 import { Input } from '@/components/Input';
+import { MemberPaymentModal } from '@/components/MemberPaymentModal';
 import { TimeField } from '@/components/TimeField';
 import { useDebts } from '@/state/DebtsContext';
 import { useSettings } from '@/state/SettingsContext';
@@ -78,10 +79,11 @@ export default function DebtDetailScreen() {
 }
 
 function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][number] }) {
-  const { payDebt, partialPayDebt, removeDebt, editDebt, toggleGroupMember } = useDebts();
+  const { payDebt, partialPayDebt, removeDebt, editDebt, payGroupMembers } = useDebts();
   const { settings } = useSettings();
 
   const isGroup = debt.kind === 'group';
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
 
   const [debtorName, setDebtorName] = useState(debt.debtorName);
   const [amountText, setAmountText] = useState(String(debt.amount / 100));
@@ -679,9 +681,10 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
                 <View style={styles.groupBox}>
                   <Checkbox
                     checked={includeMe}
-                    onToggle={handleToggleMe}
-                    label="Incluirme en la división (Yo)"
-                    hint="Si lo activas, también te incluyes como deudor"
+                    onToggle={() => { /* no-op: locked tras crear */ }}
+                    disabled
+                    label={includeMe ? 'Te incluyes en la división (Yo)' : 'No estás incluido en la división'}
+                    hint="Esta elección se fijó al crear la deuda y no puede modificarse."
                   />
                 </View>
 
@@ -694,8 +697,13 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
                   />
                 </View>
 
-                {members.map((m, idx) => (
-                  <View key={m.id} style={styles.memberRow}>
+                {members.map((m) => (
+                  <View
+                    key={m.id}
+                    style={styles.memberRow}
+                    accessible
+                    accessibilityLabel={`${m.isMe ? 'Yo' : m.name}, ${formatCurrency(m.amount, debt.currency)}, ${m.paidAt ? 'pagado' : 'pendiente'}`}
+                  >
                     <View style={styles.memberInfo}>
                       <Text style={styles.memberName} numberOfLines={1}>
                         {m.isMe ? '👤 Yo' : m.name}
@@ -721,26 +729,24 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
                       )}
                     </View>
 
-                    <Pressable
-                      onPress={() => toggleGroupMember(debt.id, m.id)}
-                      hitSlop={a11y.hitSlop}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: !!m.paidAt }}
-                      accessibilityLabel={
-                        m.paidAt
-                          ? `${m.isMe ? 'Yo' : m.name} ya pagó. Toca para des-marcar.`
-                          : `Marcar a ${m.isMe ? 'mí' : m.name} como pagado.`
-                      }
-                      style={({ pressed }) => [
-                        styles.memberPayBtn,
-                        m.paidAt ? styles.memberPaid : styles.memberPending,
-                        pressed && { opacity: 0.7 },
+                    {/* Status only (sin botón). Los pagos se hacen vía la modal. */}
+                    <View
+                      style={[
+                        styles.memberStatusBadge,
+                        m.paidAt ? styles.memberStatusPaid : styles.memberStatusPending,
                       ]}
+                      accessibilityElementsHidden
+                      importantForAccessibility="no"
                     >
-                      <Text style={[styles.memberPayText, m.paidAt && { color: '#000' }]}>
-                        {m.paidAt ? '✓ Pagado' : 'Pagar'}
+                      <Text
+                        style={[
+                          styles.memberStatusText,
+                          { color: m.paidAt ? '#000' : colors.textSecondary },
+                        ]}
+                      >
+                        {m.paidAt ? '✓ Pagado' : 'Pendiente'}
                       </Text>
-                    </Pressable>
+                    </View>
                   </View>
                 ))}
 
@@ -778,13 +784,33 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
               </>
             ) : null}
 
-            {/* Acciones — para grupales, los pagos se hacen por miembro */}
+            {/* Acciones */}
             {isPending && !isGroup ? (
               <Button
                 label="Marcar como pagada"
                 onPress={handlePay}
                 fullWidth
               />
+            ) : null}
+            {isPending && isGroup ? (
+              <>
+                <Button
+                  label="Pagar"
+                  onPress={() => setGroupModalOpen(true)}
+                  disabled={dirty}
+                  fullWidth
+                  accessibilityHint={
+                    dirty
+                      ? 'Guarda los cambios primero para poder pagar'
+                      : 'Abre la lista para seleccionar quiénes pagan'
+                  }
+                />
+                {dirty ? (
+                  <Text style={styles.payAllBtnDisabledHint}>
+                    ⚠ Guarda los cambios primero para habilitar el pago.
+                  </Text>
+                ) : null}
+              </>
             ) : null}
             <View style={{ height: spacing.sm }} />
             <Button
@@ -794,6 +820,21 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
               fullWidth
               accessibilityHint="Elimina permanentemente la deuda y su historial"
             />
+
+            {/* Modal de pago grupal */}
+            {isGroup && debt.members ? (
+              <MemberPaymentModal
+                visible={groupModalOpen}
+                members={debt.members}
+                currency={debt.currency}
+                debtTitle={debt.debtorName}
+                onClose={() => setGroupModalOpen(false)}
+                onConfirm={(ids) => {
+                  payGroupMembers(debt.id, ids);
+                  setGroupModalOpen(false);
+                }}
+              />
+            ) : null}
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -1030,26 +1071,32 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     paddingVertical: 0,
   },
-  memberPayBtn: {
-    minHeight: a11y.minTouchTarget,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
+  memberStatusBadge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
     marginLeft: spacing.sm,
+    minWidth: 88,
+    alignItems: 'center',
   },
-  memberPaid: {
+  memberStatusPaid: {
     backgroundColor: colors.paid,
   },
-  memberPending: {
+  memberStatusPending: {
     backgroundColor: colors.surfaceElevated,
     borderWidth: 1,
-    borderColor: colors.brandMuted,
+    borderColor: colors.border,
   },
-  memberPayText: {
+  memberStatusText: {
     ...typography.caption,
-    color: colors.textPrimary,
     fontWeight: '800',
+  },
+  payAllBtnDisabledHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: -spacing.xs,
+    marginBottom: spacing.sm,
   },
   sumHint: {
     ...typography.caption,

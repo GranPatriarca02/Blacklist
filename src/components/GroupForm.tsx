@@ -160,6 +160,9 @@ export function GroupForm({
           label="Yo"
           hint="Inclúyeme en la división de la deuda"
         />
+        <Text style={styles.meWarning} accessibilityRole="alert">
+          ⚠ Esta elección no se podrá cambiar después de crear la deuda.
+        </Text>
       </View>
 
       <Text style={styles.fieldLabel}>Deudores</Text>
@@ -245,6 +248,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  meWarning: {
+    ...typography.caption,
+    color: colors.routine,
+    marginTop: spacing.xs,
+    paddingHorizontal: spacing.sm,
   },
   fieldLabel: {
     ...typography.caption,

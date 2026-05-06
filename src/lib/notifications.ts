@@ -266,6 +266,49 @@ export async function syncTotalNotification(
   });
 }
 
+/**
+ * Suscribe un handler para cuando el usuario toca una notificación.
+ *
+ * Maneja DOS casos:
+ *  1. App en primer plano / segundo plano: el listener `addNotificationResponseReceivedListener`
+ *     se dispara al tocar la notif.
+ *  2. Cold start (la app estaba cerrada y se abrió tocando la notif):
+ *     `getLastNotificationResponseAsync()` devuelve la última respuesta pendiente.
+ *
+ * El callback recibe el `data` de la notificación. Para Blacklist:
+ *   - `{ debtId: string }` → abre el detalle de esa deuda
+ *   - `{ kind: 'total' }`  → abre la pantalla total
+ *
+ * Devuelve una función `unsubscribe` para limpiar.
+ */
+export function setupNotificationResponseHandler(
+  onResponse: (data: Record<string, unknown>) => void,
+): () => void {
+  const N = getNotif();
+  if (!N) return () => {};
+
+  // Cold start: la app se acaba de abrir tocando una notificación.
+  // Diferimos un poco para que la navegación esté lista (Stack montado).
+  N.getLastNotificationResponseAsync?.()
+    .then((r: any) => {
+      const data = r?.notification?.request?.content?.data;
+      if (data) {
+        setTimeout(() => onResponse(data), 400);
+      }
+    })
+    .catch(() => { /* ignorable */ });
+
+  // Live: app abierta o en background.
+  const sub = N.addNotificationResponseReceivedListener?.((r: any) => {
+    const data = r?.notification?.request?.content?.data;
+    if (data) onResponse(data);
+  });
+
+  return () => {
+    try { sub?.remove?.(); } catch { /* ignorable */ }
+  };
+}
+
 /** Cancela TODAS las notificaciones programadas (panic button). */
 export async function cancelAll(): Promise<void> {
   const N = getNotif();
