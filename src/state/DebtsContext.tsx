@@ -15,6 +15,7 @@ import {
   markPaid,
   migrateDebt,
   reconcileAll,
+  toggleGroupMemberPaid,
 } from '@/lib/debtCycles';
 import { loadDebts, saveDebts } from '@/lib/storage';
 import {
@@ -77,6 +78,8 @@ interface DebtsContextValue {
   editDebt: (id: string, patch: DebtEditInput) => void;
   /** Cambia la divisa de TODAS las deudas (y sus notificaciones). */
   changeAllCurrency: (newCurrency: string) => void;
+  /** Para grupales: marca/des-marca a un miembro como pagado. */
+  toggleGroupMember: (debtId: string, memberId: string) => void;
 }
 
 const DebtsContext = createContext<DebtsContextValue | null>(null);
@@ -181,6 +184,8 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
         ...(patch.notificationsEnabled !== undefined ? { notificationsEnabled: patch.notificationsEnabled } : {}),
         ...(patch.reactivateDay !== undefined ? { reactivateDay: patch.reactivateDay } : {}),
         ...(patch.reactivateWeekDay !== undefined ? { reactivateWeekDay: patch.reactivateWeekDay } : {}),
+        ...(patch.members !== undefined ? { members: patch.members } : {}),
+        ...(patch.customSplit !== undefined ? { customSplit: patch.customSplit } : {}),
       };
 
       dispatch({ type: 'REPLACE', debt: merged });
@@ -219,6 +224,22 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
     [state.debts],
   );
 
+  const toggleGroupMember = useCallback(
+    (debtId: string, memberId: string) => {
+      const target = state.debts.find(d => d.id === debtId);
+      if (!target || target.kind !== 'group') return;
+      const updated = toggleGroupMemberPaid(target, memberId);
+      dispatch({ type: 'REPLACE', debt: updated });
+      // Re-sync notif (cuerpo cambia con N/M pagados, y si todos pagan se silencia)
+      void syncDebtNotification(updated).then(newId => {
+        if (newId !== updated.notificationId) {
+          dispatch({ type: 'REPLACE', debt: { ...updated, notificationId: newId ?? undefined } });
+        }
+      });
+    },
+    [state.debts],
+  );
+
   const value = useMemo<DebtsContextValue>(
     () => ({
       loaded: state.loaded,
@@ -229,8 +250,9 @@ export function DebtsProvider({ children }: { children: ReactNode }) {
       removeDebt,
       editDebt,
       changeAllCurrency,
+      toggleGroupMember,
     }),
-    [state.loaded, state.debts, addDebt, payDebt, partialPayDebt, removeDebt, editDebt, changeAllCurrency],
+    [state.loaded, state.debts, addDebt, payDebt, partialPayDebt, removeDebt, editDebt, changeAllCurrency, toggleGroupMember],
   );
 
   return <DebtsContext.Provider value={value}>{children}</DebtsContext.Provider>;

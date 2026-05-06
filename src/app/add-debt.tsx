@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Background } from '@/components/Background';
 import { Button } from '@/components/Button';
+import { GroupForm, type GroupFormResult } from '@/components/GroupForm';
 import { Input } from '@/components/Input';
 import { SegmentedControl, type Segment } from '@/components/SegmentedControl';
 import { useDebts } from '@/state/DebtsContext';
@@ -30,6 +31,11 @@ const KIND_SEGMENTS: ReadonlyArray<Segment<DebtKind>> = [
     value: 'routine',
     label: 'Rutinaria',
     accessibilityHint: 'Deuda recurrente que se reabre cada periodo',
+  },
+  {
+    value: 'group',
+    label: 'Grupal',
+    accessibilityHint: 'Deuda dividida entre varias personas',
   },
 ];
 
@@ -55,6 +61,12 @@ interface FormErrors {
   amount?: string;
 }
 
+interface GroupErrors {
+  title?: string;
+  amount?: string;
+  members?: string;
+}
+
 export default function AddDebtModal() {
   const { addDebt } = useDebts();
   const { settings } = useSettings();
@@ -68,6 +80,10 @@ export default function AddDebtModal() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [reactivateDay, setReactivateDay] = useState(1);
   const [reactivateWeekDay, setReactivateWeekDay] = useState<WeekDay>(1);
+
+  // ─── Estado específico para tipo "Grupal" ──────────────────────────────
+  const [groupResult, setGroupResult] = useState<GroupFormResult | null>(null);
+  const [groupErrors, setGroupErrors] = useState<GroupErrors>({});
 
   /** Convierte "12.50" / "12,50" / "12" a centavos. Devuelve null si inválido. */
   const amountCents = useMemo<number | null>(() => {
@@ -86,6 +102,31 @@ export default function AddDebtModal() {
   }, [debtorName, amountCents]);
 
   const handleSave = useCallback(() => {
+    if (kind === 'group') {
+      // Validación grupal
+      const ge: GroupErrors = {};
+      if (!groupResult) {
+        // Construye errores específicos
+        // No tenemos acceso a los campos individuales aquí, así que mostramos
+        // un error genérico que cubre los tres casos.
+        ge.members = 'Completa título, cantidad y los nombres de todos los deudores (mínimo 2).';
+      }
+      setGroupErrors(ge);
+      if (!groupResult) return;
+
+      const input: NewDebtInput = {
+        kind: 'group',
+        debtorName: groupResult.title,
+        amount: groupResult.amountCents,
+        currency: settings.currency,
+        description: groupResult.description,
+        members: groupResult.members,
+      };
+      addDebt(input);
+      router.back();
+      return;
+    }
+
     const e = validate();
     setErrors(e);
     if (Object.keys(e).length > 0 || amountCents === null) return;
@@ -103,7 +144,7 @@ export default function AddDebtModal() {
 
     addDebt(input);
     router.back();
-  }, [kind, frequency, debtorName, amountCents, description, reactivateDay, reactivateWeekDay, validate, addDebt]);
+  }, [kind, frequency, debtorName, amountCents, description, reactivateDay, reactivateWeekDay, validate, addDebt, groupResult, settings.currency]);
 
   const handleCancel = useCallback(() => {
     router.back();
@@ -142,46 +183,58 @@ export default function AddDebtModal() {
               segments={KIND_SEGMENTS}
               value={kind}
               onChange={setKind}
-              accessibilityLabel="Tipo de deuda: única o rutinaria"
+              accessibilityLabel="Tipo de deuda: única, rutinaria o grupal"
             />
 
             <View style={{ height: spacing.lg }} />
 
-            <Input
-              label="Nombre"
-              placeholder="Ej. Carlos"
-              value={debtorName}
-              onChangeText={setDebtorName}
-              autoCapitalize="words"
-              autoComplete="name"
-              maxLength={60}
-              error={errors.debtorName}
-              hint="Persona que te debe"
-            />
+            {kind === 'group' ? (
+              <GroupForm
+                currencyCode={currentCurrency.code}
+                currencySymbol={currentCurrency.symbol}
+                currencyName={currentCurrency.name}
+                onResultChange={setGroupResult}
+                externalErrors={groupErrors}
+              />
+            ) : (
+              <>
+                <Input
+                  label="Nombre"
+                  placeholder="Ej. Carlos"
+                  value={debtorName}
+                  onChangeText={setDebtorName}
+                  autoCapitalize="words"
+                  autoComplete="name"
+                  maxLength={60}
+                  error={errors.debtorName}
+                  hint="Persona que te debe"
+                />
 
-            <Input
-              label={`Cantidad (${currentCurrency.code})`}
-              placeholder="0.00"
-              value={amountText}
-              onChangeText={setAmountText}
-              keyboardType="decimal-pad"
-              prefix={currentCurrency.symbol}
-              maxLength={12}
-              error={errors.amount}
-              hint={`Divisa: ${currentCurrency.name}. Cambia en ajustes si quieres otra.`}
-            />
+                <Input
+                  label={`Cantidad (${currentCurrency.code})`}
+                  placeholder="0.00"
+                  value={amountText}
+                  onChangeText={setAmountText}
+                  keyboardType="decimal-pad"
+                  prefix={currentCurrency.symbol}
+                  maxLength={12}
+                  error={errors.amount}
+                  hint={`Divisa: ${currentCurrency.name}. Cambia en ajustes si quieres otra.`}
+                />
 
-            <Input
-              label="Descripción"
-              placeholder="Concepto, contexto o nota…"
-              value={description}
-              onChangeText={setDescription}
-              multiline
-              numberOfLines={3}
-              maxLength={200}
-              optional
-              hint="Opcional, hasta 200 caracteres"
-            />
+                <Input
+                  label="Descripción"
+                  placeholder="Concepto, contexto o nota…"
+                  value={description}
+                  onChangeText={setDescription}
+                  multiline
+                  numberOfLines={3}
+                  maxLength={200}
+                  optional
+                  hint="Opcional, hasta 200 caracteres"
+                />
+              </>
+            )}
 
             {kind === 'routine' ? (
               <View style={styles.freqBlock}>

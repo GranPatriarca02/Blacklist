@@ -1,5 +1,9 @@
-import type { Debt, Frequency, NewDebtInput, PaymentRecord } from '@/types/debt';
+import type { Debt, Frequency, GroupMember, NewDebtInput, PaymentRecord } from '@/types/debt';
 import { createId } from './id';
+
+/** Mínimo y máximo de miembros en una deuda grupal. */
+export const GROUP_MIN_DEBTORS = 2; // sin contar "Yo"
+export const GROUP_MAX_TOTAL = 24;  // contando "Yo" si está
 
 /**
  * Lógica pura de ciclos de deuda. Sin React, sin storage. Fácil de testear.
@@ -71,6 +75,16 @@ export function createDebt(input: NewDebtInput, now: Date = new Date()): Debt {
   if (input.kind === 'routine' && !input.frequency) {
     throw new Error('Routine debts require a frequency');
   }
+
+  // Para grupales, generamos los GroupMember con división equitativa
+  let members: GroupMember[] | undefined;
+  if (input.kind === 'group') {
+    if (!input.members || input.members.length === 0) {
+      throw new Error('Group debts require at least one member');
+    }
+    members = splitEqual(input.members, input.amount);
+  }
+
   return {
     id: createId(),
     kind: input.kind,
@@ -85,10 +99,95 @@ export function createDebt(input: NewDebtInput, now: Date = new Date()): Debt {
     cycleStartedAt: iso,
     cyclePaidAt: null,
     payments: [],
-    // Defaults razonables: notificaciones apagadas, hora 9:00
+    members,
+    customSplit: input.kind === 'group' ? false : undefined,
     notificationsEnabled: false,
     notifyHour: 9,
     notifyMinute: 0,
+  };
+}
+
+/**
+ * División equitativa: reparte `total` en centavos entre los miembros,
+ * sumando los centavos restantes a los primeros para que la suma cuadre.
+ *
+ * Ej: 100 cents / 3 = [34, 33, 33] (no 33.33)
+ */
+export function splitEqual(
+  members: ReadonlyArray<{ name: string; isMe: boolean; id?: string; paidAt?: string | null }>,
+  total: number,
+): GroupMember[] {
+  const n = members.length;
+  if (n === 0) return [];
+  const base = Math.floor(total / n);
+  const remainder = total - base * n;
+  return members.map((m, i) => ({
+    id: m.id ?? createId(),
+    name: m.name.trim(),
+    amount: base + (i < remainder ? 1 : 0),
+    paidAt: m.paidAt ?? null,
+    isMe: m.isMe,
+  }));
+}
+
+/**
+ * Suma los amounts de todos los miembros de una grupal.
+ * Útil para validar que la división personalizada cuadre con `debt.amount`.
+ */
+export function sumMembers(members: ReadonlyArray<GroupMember>): number {
+  return members.reduce((acc, m) => acc + m.amount, 0);
+}
+
+/**
+ * Marca un miembro como pagado o lo des-marca (toggle).
+ * Si todos los miembros quedan pagados → `cyclePaidAt` se rellena.
+ * Si alguno se des-paga → `cyclePaidAt` vuelve a null.
+ */
+export function toggleGroupMemberPaid(
+  debt: Debt,
+  memberId: string,
+  now: Date = new Date(),
+): Debt {
+  if (debt.kind !== 'group' || !debt.members) return debt;
+
+  const target = debt.members.find(m => m.id === memberId);
+  if (!target) return debt;
+
+  const nowIso = now.toISOString();
+  const newMembers = debt.members.map(m =>
+    m.id === memberId ? { ...m, paidAt: m.paidAt ? null : nowIso } : m,
+  );
+
+  let payments = debt.payments;
+  if (target.paidAt === null) {
+    // Estaba pendiente → ahora paga: registramos pago
+    payments = [
+      ...payments,
+      {
+        id: createId(),
+        paidAt: nowIso,
+        amount: target.amount,
+        cycleStartedAt: debt.cycleStartedAt,
+        memberId: target.id,
+        memberName: target.name,
+      },
+    ];
+  } else {
+    // Estaba pagado → des-pagamos: removemos el último PaymentRecord de ese miembro
+    const lastIdx = [...payments].reverse().findIndex(p => p.memberId === memberId);
+    if (lastIdx >= 0) {
+      const realIdx = payments.length - 1 - lastIdx;
+      payments = [...payments.slice(0, realIdx), ...payments.slice(realIdx + 1)];
+    }
+  }
+
+  const allPaid = newMembers.every(m => m.paidAt !== null);
+
+  return {
+    ...debt,
+    members: newMembers,
+    payments,
+    cyclePaidAt: allPaid ? nowIso : null,
   };
 }
 
@@ -104,6 +203,9 @@ export function migrateDebt(d: any): Debt {
     reactivateDay: d.reactivateDay,
     reactivateWeekDay: d.reactivateWeekDay,
     payments: Array.isArray(d.payments) ? d.payments : [],
+    // Group fields
+    members: Array.isArray(d.members) ? d.members : undefined,
+    customSplit: typeof d.customSplit === 'boolean' ? d.customSplit : undefined,
   } as Debt;
 }
 
@@ -191,9 +293,25 @@ export function reconcileAll(debts: Debt[], now: Date = new Date()): Debt[] {
   return changed ? next : debts;
 }
 
-/** Total adeudado (suma de ciclos pendientes). */
+/**
+ * Total adeudado.
+ * - unique/routine: si está pagada, no suma; si pendiente, suma `amount`.
+ * - group: suma SOLO los `amount` de miembros pendientes.
+ */
 export function totalOwed(debts: Debt[]): number {
-  return debts.reduce((acc, d) => (d.cyclePaidAt ? acc : acc + d.amount), 0);
+  return debts.reduce((acc, d) => acc + outstandingForDebt(d), 0);
+}
+
+/** Saldo pendiente de UNA deuda. Útil para resúmenes y notificaciones. */
+export function outstandingForDebt(debt: Debt): number {
+  if (debt.cyclePaidAt) return 0;
+  if (debt.kind === 'group' && debt.members) {
+    return debt.members.reduce(
+      (acc, m) => (m.paidAt ? acc : acc + m.amount),
+      0,
+    );
+  }
+  return debt.amount;
 }
 
 /**

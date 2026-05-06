@@ -7,6 +7,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,12 +15,14 @@ import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { Background } from '@/components/Background';
 import { BellToggle } from '@/components/BellToggle';
 import { Button } from '@/components/Button';
+import { Checkbox } from '@/components/Checkbox';
 import { IconButton } from '@/components/IconButton';
 import { Input } from '@/components/Input';
 import { TimeField } from '@/components/TimeField';
 import { useDebts } from '@/state/DebtsContext';
 import { useSettings } from '@/state/SettingsContext';
-import { nextDueDate } from '@/lib/debtCycles';
+import { nextDueDate, splitEqual, sumMembers } from '@/lib/debtCycles';
+import { createId } from '@/lib/id';
 import {
   formatCurrency,
   formatDate,
@@ -29,7 +32,7 @@ import {
 import { ensurePermissions } from '@/lib/notifications';
 import { useElapsed } from '@/hooks/useElapsed';
 import { a11y, colors, radius, spacing, typography } from '@/theme';
-import type { WeekDay } from '@/types/debt';
+import type { GroupMember, WeekDay } from '@/types/debt';
 
 const WEEK_DAYS: { value: WeekDay; label: string }[] = [
   { value: 1, label: 'Lunes' },
@@ -75,8 +78,10 @@ export default function DebtDetailScreen() {
 }
 
 function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][number] }) {
-  const { payDebt, partialPayDebt, removeDebt, editDebt } = useDebts();
+  const { payDebt, partialPayDebt, removeDebt, editDebt, toggleGroupMember } = useDebts();
   const { settings } = useSettings();
+
+  const isGroup = debt.kind === 'group';
 
   const [debtorName, setDebtorName] = useState(debt.debtorName);
   const [amountText, setAmountText] = useState(String(debt.amount / 100));
@@ -98,6 +103,101 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
   const [partialText, setPartialText] = useState('');
   const [partialError, setPartialError] = useState<string | undefined>(undefined);
 
+  // amountCents debe declararse aquí (antes de los callbacks de grupo) para
+  // evitar Temporal Dead Zone si los callbacks lo cierran.
+  const amountCents = useMemo<number | null>(() => {
+    const cleaned = amountText.replace(/[^0-9.,]/g, '').replace(',', '.');
+    if (!cleaned) return null;
+    const n = parseFloat(cleaned);
+    if (Number.isNaN(n) || n <= 0) return null;
+    return Math.round(n * 100);
+  }, [amountText]);
+
+  // ─── Estado grupal ──────────────────────────────────────────────────────
+  // Trabajamos con copia local para edición. Se sincroniza al guardar.
+  const [members, setMembers] = useState<GroupMember[]>(debt.members ?? []);
+  const [customSplit, setCustomSplit] = useState<boolean>(debt.customSplit ?? false);
+  // Texto del input de cantidad por miembro (solo aplica si customSplit)
+  const [memberAmountText, setMemberAmountText] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    (debt.members ?? []).forEach(m => {
+      init[m.id] = (m.amount / 100).toFixed(2);
+    });
+    return init;
+  });
+
+  const includeMe = useMemo(() => members.some(m => m.isMe), [members]);
+
+  // Re-sync local cuando cambia el debt remoto (otro usuario marca como pagado)
+  React.useEffect(() => {
+    if (!isGroup) return;
+    setMembers(debt.members ?? []);
+    setCustomSplit(debt.customSplit ?? false);
+    const next: Record<string, string> = {};
+    (debt.members ?? []).forEach(m => {
+      next[m.id] = (m.amount / 100).toFixed(2);
+    });
+    setMemberAmountText(next);
+  }, [debt.members, debt.customSplit, isGroup]);
+
+  /** Toggle "Yo": añade o quita miembro isMe=true y re-divide si no es custom. */
+  const handleToggleMe = useCallback(() => {
+    setMembers(prev => {
+      let next: GroupMember[];
+      if (prev.some(m => m.isMe)) {
+        next = prev.filter(m => !m.isMe);
+      } else {
+        next = [
+          { id: createId(), name: 'Yo', amount: 0, paidAt: null, isMe: true },
+          ...prev,
+        ];
+      }
+      // Re-dividir si no es custom
+      if (!customSplit) {
+        const total = amountCents ?? debt.amount;
+        next = splitEqual(next, total);
+      }
+      // Actualizar texto
+      const newText: Record<string, string> = {};
+      next.forEach(m => {
+        newText[m.id] = (m.amount / 100).toFixed(2);
+      });
+      setMemberAmountText(newText);
+      return next;
+    });
+  }, [customSplit, debt.amount]);
+
+  /** Cambia un texto de cantidad de miembro (solo en customSplit). */
+  const handleMemberAmountChange = useCallback((memberId: string, value: string) => {
+    setMemberAmountText(prev => ({ ...prev, [memberId]: value }));
+    // Actualizar también el miembro en members (parsear)
+    const cleaned = value.replace(/[^0-9.,]/g, '').replace(',', '.');
+    const n = parseFloat(cleaned);
+    const cents = Number.isNaN(n) ? 0 : Math.round(n * 100);
+    setMembers(prev => prev.map(m => (m.id === memberId ? { ...m, amount: cents } : m)));
+  }, []);
+
+  /** Activar/desactivar custom split. Al desactivar, re-dividir equitativamente. */
+  const handleToggleCustomSplit = useCallback(() => {
+    setCustomSplit(prev => {
+      const next = !prev;
+      if (!next) {
+        // Volver a equitativo
+        setMembers(curr => {
+          const total = amountCents ?? debt.amount;
+          const equal = splitEqual(curr, total);
+          const newText: Record<string, string> = {};
+          equal.forEach(m => {
+            newText[m.id] = (m.amount / 100).toFixed(2);
+          });
+          setMemberAmountText(newText);
+          return equal;
+        });
+      }
+      return next;
+    });
+  }, [debt.amount]);
+
   const isPending = debt.cyclePaidAt === null;
   const elapsedMs = useElapsed(debt.cycleStartedAt, isPending);
 
@@ -108,16 +208,27 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
 
   const kindLabel = useMemo(() => {
     if (debt.kind === 'unique') return 'Única';
+    if (debt.kind === 'group' && debt.members) {
+      const paid = debt.members.filter(m => m.paidAt).length;
+      return `Grupal · ${paid}/${debt.members.length} pagados`;
+    }
     return debt.frequency === 'weekly' ? 'Rutinaria · semanal' : 'Rutinaria · mensual';
   }, [debt]);
 
-  const amountCents = useMemo<number | null>(() => {
-    const cleaned = amountText.replace(/[^0-9.,]/g, '').replace(',', '.');
-    if (!cleaned) return null;
-    const n = parseFloat(cleaned);
-    if (Number.isNaN(n) || n <= 0) return null;
-    return Math.round(n * 100);
-  }, [amountText]);
+  // Para grupales, comparamos members + customSplit con el debt remoto
+  const groupDirty = useMemo(() => {
+    if (!isGroup) return false;
+    const orig = debt.members ?? [];
+    if (members.length !== orig.length) return true;
+    if (customSplit !== (debt.customSplit ?? false)) return true;
+    for (let i = 0; i < members.length; i++) {
+      const a = members[i];
+      const b = orig.find(o => o.id === a.id);
+      if (!b) return true;
+      if (a.name !== b.name || a.amount !== b.amount || a.isMe !== b.isMe) return true;
+    }
+    return false;
+  }, [isGroup, members, customSplit, debt.members, debt.customSplit]);
 
   const dirty =
     debtorName !== debt.debtorName ||
@@ -127,7 +238,8 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
     hour !== debt.notifyHour ||
     minute !== debt.notifyMinute ||
     (debt.kind === 'routine' && debt.frequency === 'monthly' && reactivateDay !== (debt.reactivateDay ?? 1)) ||
-    (debt.kind === 'routine' && debt.frequency === 'weekly' && reactivateWeekDay !== (debt.reactivateWeekDay ?? 1));
+    (debt.kind === 'routine' && debt.frequency === 'weekly' && reactivateWeekDay !== (debt.reactivateWeekDay ?? 1)) ||
+    groupDirty;
 
   const handleSave = useCallback(() => {
     let hasErrors = false;
@@ -171,6 +283,46 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
 
     if (hasErrors || amountCents === null) return;
 
+    // ─── Caso especial: deuda grupal ─────────────────────────────────────
+    if (isGroup) {
+      let finalMembers = members;
+      let finalAmount = amountCents;
+
+      if (!customSplit) {
+        // División equitativa: re-distribuir el total entre miembros
+        finalMembers = splitEqual(members, finalAmount);
+        commitGroupSave(finalAmount, finalMembers);
+        return;
+      }
+
+      // División personalizada: validar que la suma cuadre con el total
+      const sum = sumMembers(members);
+      if (sum === amountCents) {
+        commitGroupSave(finalAmount, finalMembers);
+        return;
+      }
+
+      // No cuadra: preguntar al usuario qué hacer
+      const sumStr = formatCurrency(sum, debt.currency);
+      const totalStr = formatCurrency(amountCents, debt.currency);
+      Alert.alert(
+        'La división no cuadra',
+        `La suma de las divisiones (${sumStr}) no coincide con el total (${totalStr}).\n\n¿Qué quieres hacer?`,
+        [
+          { text: 'Volver a editar', style: 'cancel' },
+          {
+            text: `Ajustar total a ${sumStr}`,
+            onPress: () => {
+              setAmountText((sum / 100).toFixed(2));
+              commitGroupSave(sum, members);
+            },
+          },
+        ],
+      );
+      return;
+    }
+
+    // ─── Caso estándar: unique / routine ─────────────────────────────────
     editDebt(debt.id, {
       debtorName,
       amount: amountCents,
@@ -182,7 +334,20 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
       ...(debt.kind === 'routine' && debt.frequency === 'weekly' ? { reactivateWeekDay } : {}),
     });
     Alert.alert('Guardado', 'Los cambios se aplicaron correctamente.');
-  }, [debt.id, debt.kind, debt.frequency, debtorName, amountCents, description, dueDateText, hour, minute, reactivateDay, reactivateWeekDay, editDebt]);
+
+    function commitGroupSave(amount: number, mems: GroupMember[]) {
+      editDebt(debt.id, {
+        debtorName,
+        amount,
+        description,
+        notifyHour: hour,
+        notifyMinute: minute,
+        members: mems,
+        customSplit,
+      });
+      Alert.alert('Guardado', 'Los cambios grupales se aplicaron correctamente.');
+    }
+  }, [debt.id, debt.kind, debt.frequency, debt.currency, debtorName, amountCents, description, dueDateText, hour, minute, reactivateDay, reactivateWeekDay, editDebt, isGroup, members, customSplit]);
 
   const handleToggleBell = useCallback(async () => {
     if (!debt.notificationsEnabled) {
@@ -320,8 +485,8 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
               <Text style={styles.metaValue}>{formatDateTime(debt.cycleStartedAt)}</Text>
             </View>
 
-            {/* Pago parcial */}
-            {isPending ? (
+            {/* Pago parcial — no aplica a grupales (cada miembro paga individual) */}
+            {isPending && !isGroup ? (
               <>
                 <Text style={styles.sectionTitle} accessibilityRole="header">
                   Pago parcial
@@ -501,6 +666,95 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
 
             <View style={{ height: spacing.lg }} />
 
+            {/* ─── Sección Grupal: miembros + custom split ─────────────── */}
+            {isGroup ? (
+              <>
+                <Text style={styles.sectionTitle} accessibilityRole="header">
+                  Miembros
+                </Text>
+                <Text style={styles.sectionHint}>
+                  La deuda se cierra cuando todos pagan. Toca el botón de cada miembro para registrar su pago.
+                </Text>
+
+                <View style={styles.groupBox}>
+                  <Checkbox
+                    checked={includeMe}
+                    onToggle={handleToggleMe}
+                    label="Incluirme en la división (Yo)"
+                    hint="Si lo activas, también te incluyes como deudor"
+                  />
+                </View>
+
+                <View style={styles.groupBox}>
+                  <Checkbox
+                    checked={customSplit}
+                    onToggle={handleToggleCustomSplit}
+                    label="División personalizada"
+                    hint="Si lo activas, podrás cambiar cuánto debe cada uno"
+                  />
+                </View>
+
+                {members.map((m, idx) => (
+                  <View key={m.id} style={styles.memberRow}>
+                    <View style={styles.memberInfo}>
+                      <Text style={styles.memberName} numberOfLines={1}>
+                        {m.isMe ? '👤 Yo' : m.name}
+                      </Text>
+                      {customSplit ? (
+                        <View style={styles.memberAmountInputWrap}>
+                          <Text style={styles.memberPrefix}>{settings.currency}</Text>
+                          <TextInput
+                            value={memberAmountText[m.id] ?? ''}
+                            onChangeText={(v) => handleMemberAmountChange(m.id, v)}
+                            keyboardType="decimal-pad"
+                            placeholder="0.00"
+                            placeholderTextColor={colors.textMuted}
+                            selectionColor={colors.focusRing}
+                            style={styles.memberAmountInput}
+                            accessibilityLabel={`Cantidad para ${m.name}`}
+                          />
+                        </View>
+                      ) : (
+                        <Text style={styles.memberAmount}>
+                          {formatCurrency(m.amount, debt.currency)}
+                        </Text>
+                      )}
+                    </View>
+
+                    <Pressable
+                      onPress={() => toggleGroupMember(debt.id, m.id)}
+                      hitSlop={a11y.hitSlop}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: !!m.paidAt }}
+                      accessibilityLabel={
+                        m.paidAt
+                          ? `${m.isMe ? 'Yo' : m.name} ya pagó. Toca para des-marcar.`
+                          : `Marcar a ${m.isMe ? 'mí' : m.name} como pagado.`
+                      }
+                      style={({ pressed }) => [
+                        styles.memberPayBtn,
+                        m.paidAt ? styles.memberPaid : styles.memberPending,
+                        pressed && { opacity: 0.7 },
+                      ]}
+                    >
+                      <Text style={[styles.memberPayText, m.paidAt && { color: '#000' }]}>
+                        {m.paidAt ? '✓ Pagado' : 'Pagar'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                ))}
+
+                {customSplit ? (
+                  <Text style={styles.sumHint}>
+                    Suma actual: {formatCurrency(sumMembers(members), debt.currency)} ·
+                    {' '}Total: {formatCurrency(amountCents ?? debt.amount, debt.currency)}
+                  </Text>
+                ) : null}
+
+                <View style={{ height: spacing.lg }} />
+              </>
+            ) : null}
+
             {/* Historial */}
             {debt.payments.length > 0 ? (
               <>
@@ -524,8 +778,8 @@ function DebtDetail({ debt }: { debt: ReturnType<typeof useDebts>['debts'][numbe
               </>
             ) : null}
 
-            {/* Acciones */}
-            {isPending ? (
+            {/* Acciones — para grupales, los pagos se hacen por miembro */}
+            {isPending && !isGroup ? (
               <Button
                 label="Marcar como pagada"
                 onPress={handlePay}
@@ -720,6 +974,89 @@ const styles = StyleSheet.create({
     color: colors.routine,
     fontWeight: '700',
     marginTop: 2,
+  },
+  groupBox: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  memberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+    minHeight: 64,
+  },
+  memberInfo: { flex: 1 },
+  memberName: {
+    ...typography.body,
+    color: colors.textPrimary,
+    fontWeight: '600',
+  },
+  memberAmount: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  memberAmountInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.xs,
+    backgroundColor: colors.surfaceElevated,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.sm,
+    height: 36,
+  },
+  memberPrefix: {
+    ...typography.caption,
+    color: colors.textMuted,
+    marginRight: spacing.xs,
+  },
+  memberAmountInput: {
+    flex: 1,
+    ...typography.body,
+    color: colors.textPrimary,
+    paddingVertical: 0,
+  },
+  memberPayBtn: {
+    minHeight: a11y.minTouchTarget,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: spacing.sm,
+  },
+  memberPaid: {
+    backgroundColor: colors.paid,
+  },
+  memberPending: {
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.brandMuted,
+  },
+  memberPayText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  sumHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+    fontVariant: ['tabular-nums'],
   },
   notFound: {
     flex: 1,

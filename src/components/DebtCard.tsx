@@ -5,7 +5,7 @@ import { a11y, colors, radius, spacing, typography } from '@/theme';
 import type { Debt } from '@/types/debt';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useDebts } from '@/state/DebtsContext';
-import { nextDueDate } from '@/lib/debtCycles';
+import { nextDueDate, outstandingForDebt } from '@/lib/debtCycles';
 import {
   formatCurrency,
   formatDate,
@@ -40,8 +40,14 @@ export function DebtCard({ debt }: DebtCardProps) {
 
   const kindLabel = useMemo(() => {
     if (debt.kind === 'unique') return 'Única';
+    if (debt.kind === 'group' && debt.members) {
+      const paid = debt.members.filter(m => m.paidAt).length;
+      return `Grupal · ${paid}/${debt.members.length} pagados`;
+    }
     return debt.frequency === 'weekly' ? 'Rutinaria · semanal' : 'Rutinaria · mensual';
   }, [debt]);
+
+  const outstanding = useMemo(() => outstandingForDebt(debt), [debt]);
 
   const handleOpen = useCallback(() => {
     router.push({ pathname: '/debt/[id]', params: { id: debt.id } });
@@ -110,13 +116,17 @@ export function DebtCard({ debt }: DebtCardProps) {
       <View style={styles.headerRow}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText} allowFontScaling={false}>
-            {debt.debtorName.charAt(0).toUpperCase() || '?'}
+            {debt.kind === 'group' ? '👥' : (debt.debtorName.charAt(0).toUpperCase() || '?')}
           </Text>
         </View>
 
         <View style={styles.info}>
           <Text style={styles.name} numberOfLines={1}>{debt.debtorName}</Text>
-          <Text style={styles.amount}>{formatCurrency(debt.amount, debt.currency)}</Text>
+          <Text style={styles.amount}>
+            {debt.kind === 'group' && isPending
+              ? `${formatCurrency(outstanding, debt.currency)} de ${formatCurrency(debt.amount, debt.currency)}`
+              : formatCurrency(debt.amount, debt.currency)}
+          </Text>
         </View>
 
         <BellToggle
@@ -172,7 +182,7 @@ export function DebtCard({ debt }: DebtCardProps) {
           </View>
         )}
 
-        {isPending ? (
+        {isPending && debt.kind !== 'group' ? (
           <Pressable
             onPress={handlePay}
             hitSlop={a11y.hitSlop}
@@ -182,6 +192,16 @@ export function DebtCard({ debt }: DebtCardProps) {
             style={({ pressed }) => [styles.payBtn, pressed && { opacity: 0.7 }]}
           >
             <Text style={styles.payBtnText}>Pagada</Text>
+          </Pressable>
+        ) : isPending && debt.kind === 'group' ? (
+          <Pressable
+            onPress={handleOpen}
+            hitSlop={a11y.hitSlop}
+            accessibilityRole="button"
+            accessibilityLabel={`Ver miembros del grupo ${debt.debtorName}`}
+            style={({ pressed }) => [styles.openBtn, pressed && { opacity: 0.7 }]}
+          >
+            <Text style={styles.openBtnText}>Ver miembros</Text>
           </Pressable>
         ) : null}
       </View>
@@ -294,6 +314,21 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: '#000',
     fontWeight: '800',
+  },
+  openBtn: {
+    minHeight: a11y.minTouchTarget,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.brandMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openBtnText: {
+    ...typography.body,
+    color: colors.textPrimary,
+    fontWeight: '700',
   },
   history: {
     ...typography.caption,
