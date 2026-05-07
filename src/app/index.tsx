@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -6,12 +6,18 @@ import { Background } from '@/components/Background';
 import { DebtCard } from '@/components/DebtCard';
 import { EmptyState } from '@/components/EmptyState';
 import { FAB } from '@/components/FAB';
-import { FilterBar, type DebtFilter, type DebtSort } from '@/components/FilterBar';
+import {
+  FilterBar,
+  type DebtSortMode,
+  type DebtStatusFilter,
+  type DebtTypeFilter,
+  type SortDirection,
+} from '@/components/FilterBar';
 import { IconButton } from '@/components/IconButton';
 import { Title } from '@/components/Title';
 import { useDebts } from '@/state/DebtsContext';
 import { useSettings } from '@/state/SettingsContext';
-import { outstandingForDebt, totalOwed } from '@/lib/debtCycles';
+import { totalOwed } from '@/lib/debtCycles';
 import { formatCurrency } from '@/lib/format';
 import { a11y, colors, radius, spacing, typography } from '@/theme';
 import type { Debt } from '@/types/debt';
@@ -20,65 +26,98 @@ export default function HomeScreen() {
   const { loaded, debts } = useDebts();
   const { settings } = useSettings();
 
-  const [filter, setFilter] = useState<DebtFilter>('all');
-  const [sort, setSort] = useState<DebtSort>('time');
+  // ─── Estado de filtros ────────────────────────────────────────────────
+  // Tipos: multi-selección (OR). Vacío = todos los tipos.
+  const [types, setTypes] = useState<DebtTypeFilter[]>([]);
+  // Estado: mutuamente excluyente (pending/paid/null). null = ambos.
+  const [status, setStatus] = useState<DebtStatusFilter | null>(null);
+  // Orden: modo + dirección, independientes.
+  const [sortMode, setSortMode] = useState<DebtSortMode>('time');
+  const [sortDir, setSortDir] = useState<SortDirection>('desc');
 
+  const onTypeToggle = useCallback((t: DebtTypeFilter) => {
+    setTypes(prev =>
+      prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t],
+    );
+  }, []);
+
+  const onStatusToggle = useCallback((s: DebtStatusFilter) => {
+    setStatus(prev => (prev === s ? null : s));
+  }, []);
+
+  const onClearFilters = useCallback(() => {
+    setTypes([]);
+    setStatus(null);
+  }, []);
+
+  const onSortModeToggle = useCallback(() => {
+    setSortMode(prev => (prev === 'amount' ? 'time' : 'amount'));
+  }, []);
+
+  const onSortDirToggle = useCallback(() => {
+    setSortDir(prev => (prev === 'desc' ? 'asc' : 'desc'));
+  }, []);
+
+  // ─── Datos derivados ──────────────────────────────────────────────────
   const total = useMemo(() => totalOwed(debts), [debts]);
-  const pendingCount = useMemo(() => debts.filter(d => !d.cyclePaidAt).length, [debts]);
+  const pendingCount = useMemo(
+    () => debts.filter(d => !d.cyclePaidAt).length,
+    [debts],
+  );
 
   /**
-   * Conteos por filtro para mostrar como badge.
-   * Coherente con la lógica de filtrado de `filtered`.
+   * Conteos por chip. Cada chip muestra cuántas deudas hay para su criterio
+   * **aislado** (sin importar las otras selecciones), de modo que el usuario
+   * puede prever cuánto añadiría/excluiría al combinar filtros.
    */
-  const counts = useMemo<Partial<Record<DebtFilter, number>>>(() => ({
-    all: debts.length,
-    pending: debts.filter(d => !d.cyclePaidAt).length,
-    unique: debts.filter(d => d.kind === 'unique').length,
-    routine: debts.filter(d => d.kind === 'routine').length,
-    group: debts.filter(d => d.kind === 'group').length,
-    paid: debts.filter(d => !!d.cyclePaidAt).length,
-  }), [debts]);
+  const counts = useMemo(
+    () => ({
+      all: debts.length,
+      pending: debts.filter(d => !d.cyclePaidAt).length,
+      paid: debts.filter(d => !!d.cyclePaidAt).length,
+      unique: debts.filter(d => d.kind === 'unique').length,
+      routine: debts.filter(d => d.kind === 'routine').length,
+      group: debts.filter(d => d.kind === 'group').length,
+    }),
+    [debts],
+  );
 
   /**
-   * Aplicar filtro + orden.
+   * Filtra y ordena.
    *
-   * Filtros por tipo (unique/routine/group): no excluyen pagadas; muestran
-   * todas las deudas de ese tipo y dejan el orden general (pendientes arriba)
-   * gestionado por el comparador de abajo.
+   * Filtro:
+   *  - tipos: si hay selección, deuda debe pertenecer a alguno (OR).
+   *  - estado: si hay selección, deuda debe coincidir; null = ambos.
    *
-   * Orden:
-   *  - 'amount': por saldo pendiente descendente (mayor deuda primero).
-   *    Las pagadas (saldo 0) caen al fondo.
-   *  - 'time'  : pendientes ordenadas por antigüedad descendente
-   *    (más tiempo sin pagar primero); pagadas al fondo, ordenadas por
-   *    `cyclePaidAt` reciente primero.
+   * Orden: respeta totalmente la elección del usuario (ya no se fuerzan
+   * pagadas al fondo: el filtro de estado y el sort lo deciden).
+   *
+   *  - 'amount': por `debt.amount` (total, da una idea del tamaño absoluto).
+   *  - 'time'  : por "tiempo sin pagar" — para pendientes = now - inicio,
+   *    para pagadas = pagada - inicio (cuánto duró sin saldarse).
    */
-  const filtered = useMemo(() => {
-    const base = debts.filter(d => matchesFilter(d, filter));
-    const sorted = [...base].sort((a, b) => {
-      const aPaid = !!a.cyclePaidAt;
-      const bPaid = !!b.cyclePaidAt;
-      if (aPaid !== bPaid) return aPaid ? 1 : -1;
+  const visible = useMemo(() => {
+    const filtered = debts.filter(d => matchesFilter(d, types, status));
 
-      if (sort === 'amount') {
-        const diff = outstandingForDebt(b) - outstandingForDebt(a);
-        if (diff !== 0) return diff;
-        // Tie-breaker: la más antigua primero
-        return new Date(a.cycleStartedAt).getTime() - new Date(b.cycleStartedAt).getTime();
-      }
+    const dirMul = sortDir === 'desc' ? -1 : 1;
+    const now = Date.now();
 
-      // sort === 'time'
-      if (aPaid && bPaid) {
-        // Pagadas: la más recientemente pagada arriba
-        return (
-          new Date(b.cyclePaidAt!).getTime() - new Date(a.cyclePaidAt!).getTime()
-        );
+    return [...filtered].sort((a, b) => {
+      let cmp = 0;
+      if (sortMode === 'amount') {
+        cmp = a.amount - b.amount;
+      } else {
+        cmp = elapsedMs(a, now) - elapsedMs(b, now);
       }
-      // Pendientes: la que lleva más tiempo abierta primero
-      return new Date(a.cycleStartedAt).getTime() - new Date(b.cycleStartedAt).getTime();
+      if (cmp === 0) {
+        // Tie-breaker estable: el más antiguo primero.
+        cmp =
+          new Date(a.cycleStartedAt).getTime() -
+          new Date(b.cycleStartedAt).getTime();
+      }
+      return dirMul * cmp;
     });
-    return sorted;
-  }, [debts, filter, sort]);
+  }, [debts, types, status, sortMode, sortDir]);
 
   return (
     <Background>
@@ -137,10 +176,15 @@ export default function HomeScreen() {
 
         {loaded && debts.length > 0 && (
           <FilterBar
-            filter={filter}
-            onFilterChange={setFilter}
-            sort={sort}
-            onSortChange={setSort}
+            types={types}
+            onTypeToggle={onTypeToggle}
+            status={status}
+            onStatusToggle={onStatusToggle}
+            onClear={onClearFilters}
+            sortMode={sortMode}
+            onSortModeToggle={onSortModeToggle}
+            sortDir={sortDir}
+            onSortDirToggle={onSortDirToggle}
             counts={counts}
           />
         )}
@@ -155,15 +199,15 @@ export default function HomeScreen() {
             title="Aún no hay deudas registradas"
             hint="Toca el botón + para agregar tu primera deuda."
           />
-        ) : filtered.length === 0 ? (
+        ) : visible.length === 0 ? (
           <EmptyState
             emoji="🔍"
             title="Sin resultados para este filtro"
-            hint="Prueba con otra pestaña o crea una nueva deuda."
+            hint="Prueba con otra combinación o pulsa Todas para limpiar."
           />
         ) : (
           <FlatList
-            data={filtered}
+            data={visible}
             keyExtractor={d => d.id}
             renderItem={({ item }) => <DebtCard debt={item} />}
             contentContainerStyle={styles.list}
@@ -182,22 +226,112 @@ export default function HomeScreen() {
   );
 }
 
-/** Helper puro: predicado de filtrado por categoría. */
-function matchesFilter(d: Debt, f: DebtFilter): boolean {
-  switch (f) {
-    case 'all':
-      return true;
-    case 'pending':
-      return !d.cyclePaidAt;
-    case 'paid':
-      return !!d.cyclePaidAt;
-    case 'unique':
-      return d.kind === 'unique';
-    case 'routine':
-      return d.kind === 'routine';
-    case 'group':
-      return d.kind === 'group';
+/**
+ * Predicado puro de filtrado.
+ * - `types` vacío → cualquier tipo pasa.
+ * - `status` null → cualquier estado pasa.
+ */
+function matchesFilter(
+  d: Debt,
+  types: ReadonlyArray<DebtTypeFilter>,
+  status: DebtStatusFilter | null,
+): boolean {
+  if (types.length > 0 && !types.includes(d.kind as DebtTypeFilter)) {
+    return false;
   }
+  if (status === 'pending' && d.cyclePaidAt) return false;
+  if (status === 'paid' && !d.cyclePaidAt) return false;
+  return true;
+}
+
+/**
+ * Tiempo "sin pagar" en ms.
+ * - Pendiente: ahora − cycleStartedAt.
+ * - Pagada:    cyclePaidAt − cycleStartedAt (cuánto tardó en saldarse).
+ */
+function elapsedMs(d: Debt, now: number): number {
+  const start = new Date(d.cycleStartedAt).getTime();
+  const end = d.cyclePaidAt ? new Date(d.cyclePaidAt).getTime() : now;
+  return end - start;
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1 },
+  header: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  summary: {
+    marginTop: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  summaryLeft: { flex: 1 },
+  summaryMid: { alignItems: 'flex-end', marginRight: spacing.md },
+  summaryRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  summaryLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  summaryValue: {
+    ...typography.title,
+    color: colors.textPrimary,
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
+  bellEmoji: {
+    fontSize: 20,
+    marginRight: spacing.xs,
+  },
+  chevron: {
+    fontSize: 28,
+    color: colors.textMuted,
+  },
+  list: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: 120,
+  },
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    ...typography.body,
+    color: colors.textMuted,
+  },
+});
+turn false;
+  if (status === 'paid' && !d.cyclePaidAt) return false;
+  return true;
+}
+
+/**
+ * Tiempo "sin pagar" en ms.
+ * - Pendiente: ahora − cycleStartedAt.
+ * - Pagada:    cyclePaidAt − cycleStartedAt (cuánto tardó en saldarse).
+ */
+function elapsedMs(d: Debt, now: number): number {
+  const start = new Date(d.cycleStartedAt).getTime();
+  const end = d.cyclePaidAt ? new Date(d.cyclePaidAt).getTime() : now;
+  return end - start;
 }
 
 const styles = StyleSheet.create({
